@@ -12,4 +12,11 @@ function pay(user, amount) {
     return currentBalance - amount;
 }
 
-module.exports = { pay };
+function calculateBonus(salary) {
+    if (typeof salary !== "number" || salary < 0) {
+        throw new Error("Invalid salary");
+    }
+    return Math.round(salary * 0.1);
+}
+
+module.exports = { pay, calculateBonus };
