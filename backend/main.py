@@ -7,6 +7,20 @@ Provides:
 """
 
 import logging
+import sys
+
+# Ensure UTF-8 output encoding across Windows consoles
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -16,6 +30,9 @@ from config import settings
 from scheduler import WorkflowPayload
 from executor import WorkflowExecutor
 from cli_scanner import CliScanRequest, CliScanResponse, CliScanner
+
+from database import DatabaseService
+from event_bus import EventBus
 
 # Configure dual logging: console + backend/flowdev.log
 LOG_FILE = Path(__file__).parent / "flowdev.log"
@@ -40,7 +57,7 @@ logger.info(f"FlowDev-AI 日志系统已就绪，实时日志输出文件: {LOG_
 
 app = FastAPI(
     title="FlowDev-AI Core API",
-    version="1.1.0",
+    version="1.2.0",
     description="Multi-agent code review, unit test generation, and sandbox self-correction backend.",
 )
 
@@ -66,7 +83,7 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "FlowDev-AI Core",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "dag_engine": "KahnScheduler-v1",
         "llm_config": {
             "api_base": settings.OPENAI_API_BASE,
@@ -101,8 +118,56 @@ async def cli_scan(payload: CliScanRequest):
     Scans staged code files for syntax, runtime null errors, security vulnerabilities,
     and runs automated sandbox unit test validation.
     """
-    logger.info(f"Received CLI scan request for {len(payload.files)} staged file(s)")
-    return await CliScanner.scan_files(payload.files)
+    logger.info(
+        f"Received CLI scan request for project '{payload.project_id or 'rxjs'}' "
+        f"from {payload.committer or 'unknown'} ({len(payload.files)} staged file(s))"
+    )
+    return await CliScanner.scan_files(
+        files=payload.files,
+        project_id=payload.project_id or "rxjs",
+        committer=payload.committer or "unknown",
+        branch=payload.branch or "main",
+        commit_hash=payload.commit_hash or "",
+    )
+
+
+@app.get("/api/projects")
+async def list_projects():
+    """Lists all monitored projects accompanied by pass rate and total scans."""
+    return DatabaseService.list_projects_with_stats()
+
+
+@app.get("/api/projects/{project_id}/events")
+async def list_project_events(project_id: str, limit: int = 30):
+    """Lists recent audit scan events for a specific project."""
+    return DatabaseService.list_recent_events(project_id=project_id, limit=limit)
+
+
+@app.get("/api/events/recent")
+async def list_all_recent_events(limit: int = 30):
+    """Lists recent audit scan events across all projects."""
+    return DatabaseService.list_recent_events(project_id=None, limit=limit)
+
+
+@app.put("/api/projects/{project_id}/policy")
+async def update_project_policy(project_id: str, policy: dict):
+    """Updates the custom DAG review policy for a project."""
+    success = DatabaseService.update_project_policy(project_id, policy)
+    return {"success": success, "project_id": project_id}
+
+
+@app.get("/api/events/stream")
+async def stream_events():
+    """SSE endpoint broadcasting real-time commit scan events to Web dashboards."""
+    return StreamingResponse(
+        EventBus.subscribe(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 

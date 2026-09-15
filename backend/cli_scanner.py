@@ -17,6 +17,8 @@ from pydantic import BaseModel
 from ai_service import LLMService
 from agents import ReviewAgent, TestAgent, extract_code_block
 from sandbox import TestSandbox, SandboxResult
+from database import DatabaseService
+from event_bus import EventBus
 
 logger = logging.getLogger("flowdev.cli_scanner")
 
@@ -27,6 +29,10 @@ class CliFileItem(BaseModel):
 
 
 class CliScanRequest(BaseModel):
+    project_id: Optional[str] = "rxjs"
+    committer: Optional[str] = "unknown"
+    branch: Optional[str] = "main"
+    commit_hash: Optional[str] = ""
     files: List[CliFileItem]
 
 
@@ -35,6 +41,9 @@ class CliScanResponse(BaseModel):
     critical_issues: List[str]
     suggestions: List[str]
     summary: str
+    project_id: Optional[str] = None
+    committer: Optional[str] = None
+    event_id: Optional[str] = None
     file_results: Optional[List[Dict[str, Any]]] = None
 
 
@@ -58,7 +67,14 @@ class CliScanner:
     """Orchestrates static analysis, AI ReviewAgent audit, and sandbox verification."""
 
     @classmethod
-    async def scan_files(cls, files: List[CliFileItem]) -> CliScanResponse:
+    async def scan_files(
+        cls,
+        files: List[CliFileItem],
+        project_id: str = "rxjs",
+        committer: str = "unknown",
+        branch: str = "main",
+        commit_hash: str = "",
+    ) -> CliScanResponse:
         critical_issues: List[str] = []
         suggestions: List[str] = []
         file_results: List[Dict[str, Any]] = []
@@ -102,11 +118,38 @@ class CliScanner:
         else:
             summary = f"代码审查未通过，拦截提交！在 {len(files)} 个文件中发现 {len(unique_critical)} 项严重风险问题，请修复后重试。"
 
+        event_id = None
+        try:
+            # 1. Record event to persistent database
+            event_record = DatabaseService.record_scan_event(
+                project_id=project_id,
+                committer=committer,
+                branch=branch,
+                commit_hash=commit_hash,
+                passed=passed,
+                critical_issues=unique_critical,
+                suggestions=unique_suggestions,
+                summary=summary,
+                files=[
+                    {"filename": f.filename, "content": f.content, "language": detect_language(f.filename)}
+                    for f in files
+                ],
+            )
+            event_id = event_record.get("id")
+
+            # 2. Broadcast event in real-time to all connected Web browser clients
+            await EventBus.broadcast("scan_completed", event_record)
+        except Exception as err:
+            logger.warning(f"Failed to record or broadcast scan event: {err}")
+
         return CliScanResponse(
             passed=passed,
             critical_issues=unique_critical,
             suggestions=unique_suggestions,
             summary=summary,
+            project_id=project_id,
+            committer=committer,
+            event_id=event_id,
             file_results=file_results,
         )
 

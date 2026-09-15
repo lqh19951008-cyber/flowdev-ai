@@ -125,7 +125,39 @@ function postJson(host, port, endpoint, data) {
   });
 }
 
+function getGitMetadata() {
+  try {
+    const toplevel = execSync("git rev-parse --show-toplevel", {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "ignore"],
+    }).trim();
+    const branch = execSync("git rev-parse --abbrev-ref HEAD", {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "ignore"],
+    }).trim();
+    const committer =
+      execSync("git config user.name", {
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "ignore"],
+      }).trim() || "developer";
+    const committerEmail = execSync("git config user.email", {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "ignore"],
+    }).trim();
+    const fullCommitter = committerEmail ? `${committer} <${committerEmail}>` : committer;
+    const projectId = path.basename(toplevel) || "unknown";
+    return { projectId, branch, committer: fullCommitter };
+  } catch (e) {
+    return { projectId: "default-project", branch: "main", committer: "developer" };
+  }
+}
+
 async function main() {
+  // Support quick environment bypass: FLOWDEV_DISABLE=1 git commit
+  if (process.env.FLOWDEV_DISABLE === "1") {
+    process.exit(0);
+  }
+
   const stagedFiles = getStagedCodeFiles();
 
   // If no code changes in staged index, quietly allow commit
@@ -133,9 +165,11 @@ async function main() {
     process.exit(0);
   }
 
+  const { projectId, branch, committer } = getGitMetadata();
+
   printBanner();
   console.log(
-    `\n🔍 检测到暂存区包含 ${c.bold}${stagedFiles.length}${c.reset} 个待提交源码文件:`
+    `\n🔍 [${c.cyan}${projectId}${c.reset} / ${c.yellow}${branch}${c.reset}] 检测到暂存区包含 ${c.bold}${stagedFiles.length}${c.reset} 个待提交源码文件:`
   );
   stagedFiles.forEach((f) => console.log(`   ${c.dim}•${c.reset} ${f}`));
 
@@ -151,21 +185,28 @@ async function main() {
   let scanResult;
   try {
     scanResult = await postJson(API_HOST, API_PORT, API_PATH, {
+      project_id: projectId,
+      committer,
+      branch,
       files: filesPayload,
     });
   } catch (err) {
-    console.error(
-      `\n${c.yellow}⚠️  [FlowDev-AI 警告] 无法连接到门禁服务 (http://${API_HOST}:${API_PORT})${c.reset}`
-    );
-    console.error(`   原因: ${err.message}`);
-    console.error(
-      `   提示: 请确认已启动后端服务 (cd backend && python -m uvicorn main:app --port 8000)`
-    );
-    console.error(
-      `   为保证提交安全，本次暂存代码未能完成 AI 审查。您可以使用 --no-verify 跳过，或启动后端重试。\n`
-    );
-    // Block commit by default when server is unreachable, protecting the repository
-    process.exit(1);
+    const isStrict = process.env.FLOWDEV_STRICT === "1";
+    if (isStrict) {
+      console.error(
+        `\n${c.yellow}⚠️  [FlowDev-AI 警告] 无法连接到门禁服务 (http://${API_HOST}:${API_PORT})${c.reset}`
+      );
+      console.error(`   原因: ${err.message}`);
+      console.error(
+        `   提示: 当前处于严格门禁模式 (FLOWDEV_STRICT=1)，阻断提交。\n`
+      );
+      process.exit(1);
+    } else {
+      console.log(
+        `\n${c.dim}[FlowDev-AI] 本地门禁服务未启动 (127.0.0.1:8000)，已安全降级放行提交 (设置 FLOWDEV_STRICT=1 可开启未启动阻断)${c.reset}\n`
+      );
+      process.exit(0);
+    }
   }
 
   console.log(

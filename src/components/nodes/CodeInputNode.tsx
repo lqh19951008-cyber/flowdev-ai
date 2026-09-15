@@ -2,55 +2,64 @@
 
 import React, { memo } from "react";
 import { NodeProps } from "@xyflow/react";
-import { FileCode2, Terminal, GitBranch } from "lucide-react";
+import { FileCode2, GitCommit, Filter, FolderX } from "lucide-react";
 import { CustomNode, CodeInputConfig } from "@/types/flow";
 import { BaseNodeCard } from "./BaseNodeCard";
 
 export const CodeInputNode = memo(({ id, data, selected }: NodeProps<CustomNode>) => {
-  const config = (data.config || {}) as Partial<CodeInputConfig>;
+  const nodeData = data || ({} as any);
+  const config = (nodeData.config || {}) as Partial<CodeInputConfig>;
   const language = config.language || "typescript";
-  const sourceType = config.sourceType || "snippet";
-  const sampleCode = config.sampleCode || "";
-  const lineCount = sampleCode ? sampleCode.split("\n").length : 24;
+  const triggerEvent = config.triggerEvent || "pre-commit";
+  const filePatterns = config.filePatterns && config.filePatterns.length > 0
+    ? config.filePatterns.slice(0, 2).join(", ")
+    : "**/*.ts, **/*.py";
+  const ignoredDirs = config.ignoredDirs && config.ignoredDirs.length > 0
+    ? config.ignoredDirs.slice(0, 2).join(", ")
+    : "node_modules, dist";
 
   return (
     <BaseNodeCard
       id={id}
       selected={selected}
-      title={data.label || "源码输入 (Input)"}
-      typeBadge="INPUT_SOURCE"
-      status={data.status}
+      title={nodeData.label || "门禁触发与范围 (Scope)"}
+      typeBadge="TRIGGER_SCOPE"
+      status={nodeData.status || "idle"}
       icon={FileCode2}
       iconColor="text-amber-400"
       iconBg="bg-amber-500/15 border-amber-500/30"
       hasTargetHandle={false}
       hasSourceHandle={true}
     >
-      <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
-        <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/10 border border-amber-500/25 text-amber-300 font-mono">
-          {sourceType === "git" ? (
-            <>
-              <GitBranch className="h-3 w-3" /> Git 变更
-            </>
-          ) : (
-            <>
-              <Terminal className="h-3 w-3" /> 代码片段
-            </>
-          )}
+      <div className="flex items-center justify-between text-[11px] font-mono">
+        <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/10 border border-amber-500/25 text-amber-300 font-semibold">
+          <GitCommit className="h-3 w-3" /> {triggerEvent}
         </span>
-        <span className="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700/60 text-slate-300 font-mono uppercase">
+        <span className="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700/60 text-slate-300 font-mono uppercase text-[10px]">
           {language}
-        </span>
-        <span className="text-[10px] text-slate-400 font-mono ml-auto">
-          {lineCount} 行代码
         </span>
       </div>
 
-      <p className="text-[11px] text-slate-400 line-clamp-1">
-        {data.description || "接收待评审的代码上下文或 Git PR 变更"}
-      </p>
+      <div className="space-y-1 text-[10px] font-mono">
+        <div className="flex items-center gap-1 text-slate-300 bg-slate-950/60 px-2 py-1 rounded border border-slate-800/80">
+          <Filter className="h-3 w-3 text-amber-400 shrink-0" />
+          <span className="text-slate-400">匹配:</span>
+          <span className="truncate text-slate-200">{filePatterns}</span>
+        </div>
+        <div className="flex items-center gap-1 text-slate-400 bg-slate-950/40 px-2 py-0.5 rounded border border-slate-800/60">
+          <FolderX className="h-3 w-3 text-slate-500 shrink-0" />
+          <span className="text-slate-500">排除:</span>
+          <span className="truncate text-slate-400">{ignoredDirs}</span>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between text-[10px] text-slate-400 pt-0.5">
+        <span className="text-amber-400/90 font-medium">⚡ 提交时毫秒级拦截</span>
+        <span className="font-mono text-slate-500">内置仿真测试样本</span>
+      </div>
     </BaseNodeCard>
   );
 });
 
 CodeInputNode.displayName = "CodeInputNode";
+

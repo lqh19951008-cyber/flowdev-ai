@@ -2,30 +2,51 @@
 
 import React, { memo } from "react";
 import { NodeProps } from "@xyflow/react";
-import { GitCompare, FolderArchive, ArrowDownToLine, Eye } from "lucide-react";
+import { GitCompare, Eye, ShieldAlert, BellRing } from "lucide-react";
 import { CustomNode, DiffExportConfig } from "@/types/flow";
 import { BaseNodeCard } from "./BaseNodeCard";
 import { useFlowStore } from "@/stores/useFlowStore";
 
-const formatLabels: Record<string, string> = {
-  unified_diff: "Unified Diff",
-  git_patch: "Git Patch (.patch)",
-  json_report: "JSON 评估报告",
+const actionBadges: Record<string, { label: string; color: string; border: string }> = {
+  block_commit: {
+    label: "🚨 强行阻断 (Exit 1)",
+    color: "text-rose-300 bg-rose-500/10",
+    border: "border-rose-500/30",
+  },
+  warn_only: {
+    label: "⚠️ 弱告警放行",
+    color: "text-amber-300 bg-amber-500/10",
+    border: "border-amber-500/30",
+  },
+  create_review_pr: {
+    label: "🔄 打回重评补丁",
+    color: "text-cyan-300 bg-cyan-500/10",
+    border: "border-cyan-500/30",
+  },
+};
+
+const notifyLabels: Record<string, string> = {
+  none: "无实时推送",
+  feishu: "飞书群机器人",
+  dingtalk: "钉钉群机器人",
+  slack: "Slack Webhook",
 };
 
 export const DiffExportNode = memo(({ id, data, selected }: NodeProps<CustomNode>) => {
   const { setDiffModalOpen } = useFlowStore();
-  const config = (data.config || {}) as Partial<DiffExportConfig>;
-  const format = config.exportFormat || "unified_diff";
-  const outputPath = config.outputPath || "./output/patch.diff";
+  const nodeData = data || ({} as any);
+  const config = (nodeData.config || {}) as Partial<DiffExportConfig>;
+  const action = config.failureAction || "block_commit";
+  const actionInfo = actionBadges[action] || actionBadges.block_commit;
+  const notifyChannel = config.notifyChannel || "feishu";
 
   return (
     <BaseNodeCard
       id={id}
       selected={selected}
-      title={data.label || "代码差异与补丁导出"}
-      typeBadge="OUTPUT_DEST"
-      status={data.status}
+      title={nodeData.label || "门禁决策与阻断动作 (Enforce)"}
+      typeBadge="ENFORCE_DECISION"
+      status={nodeData.status || "idle"}
       icon={GitCompare}
       iconColor="text-cyan-400"
       iconBg="bg-cyan-500/15 border-cyan-500/30"
@@ -33,16 +54,25 @@ export const DiffExportNode = memo(({ id, data, selected }: NodeProps<CustomNode
       hasSourceHandle={false}
     >
       <div className="flex items-center justify-between text-[11px] font-mono">
-        <span className="flex items-center gap-1 text-cyan-300 bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/20">
-          <ArrowDownToLine className="h-3 w-3" />
-          {formatLabels[format] || format}
+        <span
+          className={`flex items-center gap-1 px-2 py-0.5 rounded font-medium border ${actionInfo.color} ${actionInfo.border}`}
+        >
+          <ShieldAlert className="h-3 w-3" />
+          {actionInfo.label}
         </span>
-        <span className="text-[10px] text-slate-400">已就绪</span>
+        <span className="text-[10px] text-slate-400 font-mono">
+          Unified Diff
+        </span>
       </div>
 
-      <div className="flex items-center gap-1.5 text-[11px] text-slate-400 bg-slate-950/60 px-2 py-1 rounded border border-slate-800/80 font-mono truncate">
-        <FolderArchive className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-        <span className="truncate">{outputPath}</span>
+      <div className="flex items-center justify-between text-[10px] text-slate-300 bg-slate-950/60 px-2 py-1 rounded border border-slate-800/80">
+        <span className="flex items-center gap-1 text-slate-400">
+          <BellRing className="h-3 w-3 text-cyan-400" />
+          告警通道:
+        </span>
+        <span className="font-mono text-cyan-300">
+          {notifyLabels[notifyChannel] || notifyChannel}
+        </span>
       </div>
 
       {/* Button to open Monaco Diff Comparison Modal */}
@@ -52,13 +82,14 @@ export const DiffExportNode = memo(({ id, data, selected }: NodeProps<CustomNode
           e.stopPropagation();
           setDiffModalOpen(true);
         }}
-        className="w-full mt-1.5 py-1 px-2 flex items-center justify-center gap-1.5 rounded-md bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 text-cyan-300 text-[11px] font-medium transition-all shadow-sm"
+        className="w-full mt-1 py-1 px-2 flex items-center justify-center gap-1.5 rounded-md bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 text-cyan-300 text-[11px] font-medium transition-all shadow-sm cursor-pointer"
       >
         <Eye className="h-3 w-3" />
-        <span>查看代码 Diff 对比</span>
+        <span>查看自愈 Diff 补丁</span>
       </button>
     </BaseNodeCard>
   );
 });
 
 DiffExportNode.displayName = "DiffExportNode";
+

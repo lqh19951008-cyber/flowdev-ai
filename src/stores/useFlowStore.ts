@@ -15,11 +15,14 @@ import {
   NodeExecutionStatus,
   ExecutionArtifacts,
   PresetId,
+  ProjectItem,
+  ScanEventItem,
+  ActiveViewMode,
 } from "@/types/flow";
 import { executeWorkflowStream } from "@/lib/sse";
 import { getPreset } from "@/lib/presets";
 
-const STORAGE_KEY = "flowdev_workflow_v1";
+const STORAGE_KEY = "flowdev_workflow_v2";
 
 let persistTimer: NodeJS.Timeout | null = null;
 const debouncedPersist = (nodes: CustomNode[], edges: Edge[]) => {
@@ -42,6 +45,10 @@ const debouncedPersist = (nodes: CustomNode[], edges: Edge[]) => {
 };
 
 interface FlowState {
+  // Main Navigation View: "dashboard" (质量大盘) vs "pipeline" (策略编排)
+  activeViewMode: ActiveViewMode;
+  setActiveViewMode: (mode: ActiveViewMode) => void;
+
   nodes: CustomNode[];
   edges: Edge[];
   selectedNode: CustomNode | null;
@@ -49,15 +56,23 @@ interface FlowState {
   isSidebarOpen: boolean;
   isTopologyModalOpen: boolean;
 
-  // Milestone 3 Execution State
+  // Execution State
   isExecuting: boolean;
   nodeLogs: Record<string, string[]>;
   workflowError: string | null;
 
-  // Milestone 5: Artifacts & Presets
+  // Artifacts & Presets
   artifacts: ExecutionArtifacts;
   isDiffModalOpen: boolean;
   activePresetId: PresetId;
+
+  // Multi-Tenant & Live Guard State
+  projects: ProjectItem[];
+  selectedProjectId: string;
+  recentEvents: ScanEventItem[];
+  unreadEventsCount: number;
+  isProjectStatsModalOpen: boolean;
+  isLiveFeedOpen: boolean;
 
   // Actions
   onNodesChange: (changes: NodeChange<CustomNode>[]) => void;
@@ -77,6 +92,17 @@ interface FlowState {
   setEdges: (edges: Edge[]) => void;
   clearCanvas: () => void;
 
+  // Multi-Tenant Actions
+  setSelectedProjectId: (id: string) => void;
+  setProjects: (projects: ProjectItem[]) => void;
+  fetchProjects: () => Promise<void>;
+  fetchRecentEvents: (projectId?: string) => Promise<void>;
+  addLiveEvent: (event: ScanEventItem) => void;
+  clearUnreadEventsCount: () => void;
+  setProjectStatsModalOpen: (open: boolean) => void;
+  setLiveFeedOpen: (open: boolean) => void;
+  saveCurrentPolicyToProject: (projectId: string) => Promise<boolean>;
+
   // Streaming Actions
   setNodeStatus: (id: string, status: NodeExecutionStatus) => void;
   appendNodeLog: (id: string, log: string) => void;
@@ -88,58 +114,72 @@ export function createDefaultNodeData(type: FlowNodeType): FlowNodeData {
   switch (type) {
     case "code_input":
       return {
-        label: "源码输入 (Input)",
+        label: "触发范围与文件过滤 (Scope)",
         type: "code_input",
-        description: "接收代码片段或 Git PR 变更 Diff 进行分析",
+        description: "定义 Git Hook 捕获范围，过滤白名单后缀与忽略目录",
         status: "idle",
         config: {
-          sourceType: "snippet",
-          language: "python",
+          sourceType: "git",
+          language: "typescript",
+          filePatterns: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.py"],
+          ignoredDirs: ["node_modules", "dist", ".next", "build", "coverage"],
+          triggerEvent: "pre-commit",
+          maxFileSizeKb: 500,
           sampleCode:
-            "def calculate_discount(price: float, member_type: str = 'REGULAR') -> float:\n" +
-            "    if price < 0:\n" +
-            "        raise ValueError('Invalid price')\n" +
-            "    if member_type == 'VIP':\n" +
-            "        return price * 0.8\n" +
-            "    return price * 0.95\n",
+            "// 模拟提交代码 (用于策略拦截力仿真验证)\n" +
+            "export function payOrder(user: any, amount: number) {\n" +
+            "  const balance = user.wallet.balance; // 潜在空指针崩溃隐患\n" +
+            "  return balance >= amount;\n" +
+            "}\n",
         },
       };
     case "llm_review":
       return {
-        label: "代码规范与漏洞评审",
+        label: "代码质量与漏洞审查 (Security)",
         type: "llm_review",
-        description: "基于 DeepSeek-V3 对逻辑、安全及异味进行深度审查",
+        description: "基于 DeepSeek 深度推演，阻断空指针/SQL注入/密钥泄露",
         status: "idle",
         config: {
           model: "AI/deekseek-v4-flash-0731",
-          temperature: 0.2,
+          temperature: 0.1,
+          severityLevel: "strict",
+          blockNullDeref: true,
+          blockSqlInjection: true,
+          blockHardcodedSecrets: true,
+          blockDangerousEval: true,
           promptTemplate:
-            "你是一个资深全栈架构师与安全专家。请评审以下 {{language}} 代码，识别逻辑死角、安全隐患与设计异味，并输出具体修改建议：\n\n```{{language}}\n{{code}}\n```",
-          reviewAspects: ["代码异味", "安全漏洞", "类型健壮性", "边界条件"],
+            "你是一名资深 DevOps 代码门禁与质量安全审查专家。请审查以下待提交代码，识别致命隐患并输出决策：\n\n```{{language}}\n{{code}}\n```",
+          reviewAspects: ["空指针崩溃", "安全注入漏洞", "敏感秘钥泄露", "死循环隐患"],
         },
       };
     case "test_generator":
       return {
-        label: "Jest/Unittest 单测生成",
+        label: "自动化单测覆盖率卡点 (Tests)",
         type: "test_generator",
-        description: "针对核心逻辑生成覆盖率达标的高质量自动化单元测试套件",
+        description: "强制要求关键逻辑编写测试，并在本地沙箱隔离验证",
         status: "idle",
         config: {
           framework: "unittest",
-          targetCoverage: 85,
+          enforceTests: true,
+          targetCoverage: 80,
           mockMode: true,
+          sandboxTimeoutSec: 5,
+          selfCorrectionRetries: 2,
           promptTemplate:
             "请针对该功能编写覆盖正常输入与异常边界情况的完整单测代码：\n\n{{code}}",
         },
       };
     case "diff_export":
       return {
-        label: "代码差异与补丁导出",
+        label: "门禁决策与阻断动作 (Enforce)",
         type: "diff_export",
-        description: "整合审查建议与生成单测，导出标准 Git Patch 与分析报告",
+        description: "判定审查未通过时执行 Exit 1 掐断提交并记录审计流水",
         status: "idle",
         config: {
           exportFormat: "unified_diff",
+          failureAction: "block_commit",
+          notifyChannel: "feishu",
+          exportReport: true,
           outputPath: "./output/review_patch.diff",
           autoApply: false,
         },
@@ -151,25 +191,25 @@ const defaultInitialNodes: CustomNode[] = [
   {
     id: "node-input",
     type: "code_input",
-    position: { x: 80, y: 180 },
+    position: { x: 50, y: 150 },
     data: createDefaultNodeData("code_input"),
   },
   {
     id: "node-review",
     type: "llm_review",
-    position: { x: 440, y: 100 },
+    position: { x: 380, y: 60 },
     data: createDefaultNodeData("llm_review"),
   },
   {
     id: "node-test",
     type: "test_generator",
-    position: { x: 440, y: 280 },
+    position: { x: 380, y: 250 },
     data: createDefaultNodeData("test_generator"),
   },
   {
     id: "node-export",
     type: "diff_export",
-    position: { x: 820, y: 180 },
+    position: { x: 710, y: 150 },
     data: createDefaultNodeData("diff_export"),
   },
 ];
@@ -258,6 +298,18 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   artifacts: initialArtifacts,
   isDiffModalOpen: false,
   activePresetId: "full_review_heal",
+
+  // Main Navigation View: "dashboard" vs "pipeline"
+  activeViewMode: "dashboard",
+  setActiveViewMode: (mode: ActiveViewMode) => set({ activeViewMode: mode }),
+
+  // Multi-Tenant & Live Guard State
+  projects: [],
+  selectedProjectId: "all",
+  recentEvents: [],
+  unreadEventsCount: 0,
+  isProjectStatsModalOpen: false,
+  isLiveFeedOpen: false,
 
   onNodesChange: (changes) => {
     const nextNodes = applyNodeChanges(changes, get().nodes);
@@ -382,8 +434,31 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed.nodes) && Array.isArray(parsed.edges) && parsed.nodes.length > 0) {
+          const defaultPositions = [
+            { x: 50, y: 150 },
+            { x: 380, y: 60 },
+            { x: 380, y: 250 },
+            { x: 710, y: 150 },
+          ];
+          const safeNodes: CustomNode[] = parsed.nodes.map((n: any, idx: number) => {
+            const defaultData = createDefaultNodeData(n?.type || "code_input");
+            return {
+              id: n?.id || `node-${idx}`,
+              type: n?.type || "code_input",
+              position: n?.position || defaultPositions[idx] || { x: 50 + idx * 250, y: 150 },
+              data: {
+                ...defaultData,
+                ...(n?.data || {}),
+                label: n?.data?.label || n?.label || defaultData.label,
+                config: {
+                  ...(defaultData.config || {}),
+                  ...(n?.data?.config || n?.config || {}),
+                },
+              },
+            };
+          });
           set({
-            nodes: parsed.nodes,
+            nodes: safeNodes,
             edges: parsed.edges,
           });
         }
@@ -413,6 +488,151 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       isExecuting: false,
     });
     debouncedPersist([], []);
+  },
+
+  // Multi-Tenant Actions
+  setSelectedProjectId: (id: string) => {
+    set({ selectedProjectId: id });
+    get().fetchRecentEvents(id === "all" ? undefined : id);
+
+    if (id !== "all") {
+      const proj = get().projects.find((p) => p.id === id);
+      if (
+        proj &&
+        proj.policy &&
+        Array.isArray((proj.policy as any).nodes) &&
+        (proj.policy as any).nodes.length > 0
+      ) {
+        const defaultPositions = [
+          { x: 50, y: 150 },
+          { x: 380, y: 60 },
+          { x: 380, y: 250 },
+          { x: 710, y: 150 },
+        ];
+        const rawNodes = (proj.policy as any).nodes;
+        const normalizedNodes: CustomNode[] = rawNodes.map((n: any, idx: number) => {
+          const defaultData = createDefaultNodeData(n?.type || "code_input");
+          return {
+            id: n?.id || `node-${idx}`,
+            type: n?.type || "code_input",
+            position: n?.position || defaultPositions[idx] || { x: 50 + idx * 250, y: 150 },
+            data: {
+              ...defaultData,
+              ...(n?.data || {}),
+              label: n?.data?.label || n?.label || defaultData.label,
+              config: {
+                ...(defaultData.config || {}),
+                ...(n?.data?.config || n?.config || {}),
+              },
+            },
+          };
+        });
+
+        const rawEdges = (proj.policy as any).edges || [];
+        const normalizedEdges: Edge[] = rawEdges.map((e: any, idx: number) => ({
+          id: e.id || `edge-${idx}`,
+          source: e.source,
+          target: e.target,
+          animated: true,
+          style: e.style || { stroke: "#6366f1", strokeWidth: 2 },
+        }));
+
+        set({
+          nodes: normalizedNodes,
+          edges: normalizedEdges,
+        });
+      }
+    }
+  },
+
+  setProjects: (projects: ProjectItem[]) => set({ projects }),
+
+  fetchProjects: async () => {
+    try {
+      const res = await fetch("http://127.0.0.1:8000/api/projects");
+      if (res.ok) {
+        const data = await res.json();
+        set({ projects: data });
+      }
+    } catch (e) {
+      console.warn("Failed to fetch projects", e);
+    }
+  },
+
+  fetchRecentEvents: async (projectId?: string) => {
+    try {
+      const url =
+        projectId && projectId !== "all"
+          ? `http://127.0.0.1:8000/api/projects/${encodeURIComponent(projectId)}/events`
+          : `http://127.0.0.1:8000/api/events/recent`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        set({ recentEvents: data });
+      }
+    } catch (e) {
+      console.warn("Failed to fetch recent events", e);
+    }
+  },
+
+  addLiveEvent: (event: ScanEventItem) => {
+    set((state) => ({
+      recentEvents: [
+        event,
+        ...state.recentEvents.filter((e) => e.id !== event.id),
+      ].slice(0, 50),
+      unreadEventsCount: state.unreadEventsCount + 1,
+    }));
+    get().fetchProjects();
+  },
+
+  clearUnreadEventsCount: () => set({ unreadEventsCount: 0 }),
+
+  setProjectStatsModalOpen: (open: boolean) =>
+    set({ isProjectStatsModalOpen: open }),
+
+  setLiveFeedOpen: (open: boolean) => set({ isLiveFeedOpen: open }),
+
+  saveCurrentPolicyToProject: async (projectId: string) => {
+    try {
+      const policyPayload = {
+        preset: get().activePresetId,
+        updated_at: new Date().toISOString(),
+        nodes_count: get().nodes.length,
+        edges_count: get().edges.length,
+        nodes: get().nodes.map((n) => ({
+          id: n.id,
+          type: n.type,
+          position: n.position,
+          data: n.data,
+          label: n.data?.label,
+          config: n.data?.config,
+        })),
+        edges: get().edges.map((e) => ({
+          id: e.id,
+          source: e.source,
+          target: e.target,
+        })),
+      };
+
+      const res = await fetch(
+        `http://127.0.0.1:8000/api/projects/${encodeURIComponent(projectId)}/policy`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(policyPayload),
+        }
+      );
+
+      if (res.ok) {
+        await get().fetchProjects();
+        return true;
+      }
+      return false;
+    } catch (e) {
+      console.error("Failed to save project policy", e);
+      return false;
+    }
   },
 
   // SSE Actions

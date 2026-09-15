@@ -4,31 +4,31 @@ import { createDefaultNodeData } from "@/stores/useFlowStore";
 export const WORKFLOW_PRESETS: WorkflowPreset[] = [
   {
     id: "full_review_heal",
-    name: "完整审查与自愈闭环",
-    description: "代码输入 → LLM 审查 + 单测生成与沙箱验证 → 差异导出",
+    name: "企业级 pre-commit 门禁防线 (双规并联 · 推荐)",
+    description: "Git 触发捕获 → 代码安全漏洞阻断 + 单测覆盖率卡点 (并联) → Exit 1 强行阻断决策",
     nodes: [
       {
         id: "node-input",
         type: "code_input",
-        position: { x: 80, y: 180 },
+        position: { x: 50, y: 150 },
         data: createDefaultNodeData("code_input"),
       },
       {
         id: "node-review",
         type: "llm_review",
-        position: { x: 440, y: 100 },
+        position: { x: 380, y: 60 },
         data: createDefaultNodeData("llm_review"),
       },
       {
         id: "node-test",
         type: "test_generator",
-        position: { x: 440, y: 280 },
+        position: { x: 380, y: 250 },
         data: createDefaultNodeData("test_generator"),
       },
       {
         id: "node-export",
         type: "diff_export",
-        position: { x: 820, y: 180 },
+        position: { x: 710, y: 150 },
         data: createDefaultNodeData("diff_export"),
       },
     ],
@@ -63,19 +63,19 @@ export const WORKFLOW_PRESETS: WorkflowPreset[] = [
   },
   {
     id: "quick_test_gen",
-    name: "极速单测生成流",
-    description: "代码输入 → 单测生成 Agent，快速生成全覆盖用例",
+    name: "自动化单测覆盖率红线流 (质量红线)",
+    description: "Git 提交拦截 → 单测覆盖率校验 (≥80%) + 沙箱隔离验证 → 门禁裁决",
     nodes: [
       {
         id: "node-input",
         type: "code_input",
-        position: { x: 120, y: 200 },
+        position: { x: 100, y: 160 },
         data: createDefaultNodeData("code_input"),
       },
       {
         id: "node-test",
         type: "test_generator",
-        position: { x: 520, y: 200 },
+        position: { x: 480, y: 160 },
         data: createDefaultNodeData("test_generator"),
       },
     ],
@@ -91,19 +91,19 @@ export const WORKFLOW_PRESETS: WorkflowPreset[] = [
   },
   {
     id: "security_audit",
-    name: "纯代码安全审计流",
-    description: "代码输入 → 漏洞深度审查，专项排查高危隐患",
+    name: "致命缺陷与安全漏洞拦截流 (专项防御)",
+    description: "Git 提交拦截 → DeepSeek 阻断空指针/SQL注入/明文秘钥 → 门禁拦截裁决",
     nodes: [
       {
         id: "node-input",
         type: "code_input",
-        position: { x: 120, y: 200 },
+        position: { x: 100, y: 160 },
         data: createDefaultNodeData("code_input"),
       },
       {
         id: "node-review",
         type: "llm_review",
-        position: { x: 520, y: 200 },
+        position: { x: 480, y: 160 },
         data: createDefaultNodeData("llm_review"),
       },
     ],

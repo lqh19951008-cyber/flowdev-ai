@@ -73,10 +73,11 @@ export function generateWorkflowTopology(
   const inDegree: Record<string, number> = {};
 
   for (const node of nodes) {
+    const data = node.data || (node as any);
     langGraphNodes[node.id] = {
       type: node.type || "code_input",
-      label: node.data.label,
-      config: node.data.config,
+      label: data?.label || (node as any)?.label || "未命名门禁节点",
+      config: data?.config || (node as any)?.config || {},
     };
     langGraphEdges[node.id] = [];
     inDegree[node.id] = 0;
@@ -101,12 +102,15 @@ export function generateWorkflowTopology(
     nodeCount: nodes.length,
     edgeCount: edges.length,
     executionOrder: order,
-    nodes: nodes.map((n) => ({
-      id: n.id,
-      type: n.type || "code_input",
-      label: n.data.label,
-      config: n.data.config,
-    })),
+    nodes: nodes.map((n) => {
+      const data = n.data || (n as any);
+      return {
+        id: n.id,
+        type: n.type || "code_input",
+        label: data?.label || (n as any)?.label || "未命名门禁节点",
+        config: data?.config || (n as any)?.config || {},
+      };
+    }),
     edges: edges.map((e) => ({
       id: e.id,
       source: e.source,

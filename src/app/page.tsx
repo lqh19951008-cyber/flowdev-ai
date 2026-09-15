@@ -1,19 +1,31 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Header } from "@/components/layout/Header";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { FlowCanvas } from "@/components/canvas/FlowCanvas";
 import { PropertyDrawer } from "@/components/layout/PropertyDrawer";
+import { StatusBar } from "@/components/layout/StatusBar";
 import { TopologyModal } from "@/components/modal/TopologyModal";
 import { DiffModal } from "@/components/modal/DiffModal";
+import { LiveGuardFeed } from "@/components/dashboard/LiveGuardFeed";
+import { ProjectStatsModal } from "@/components/dashboard/ProjectStatsModal";
+import { QualityDashboardView } from "@/components/dashboard/QualityDashboardView";
 import { useFlowStore } from "@/stores/useFlowStore";
 
 export default function Home() {
   const initFromStorage = useFlowStore((s) => s.initFromStorage);
+  const activeViewMode = useFlowStore((s) => s.activeViewMode);
+  const [showMiniMap, setShowMiniMap] = useState(true);
 
   useEffect(() => {
     initFromStorage();
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("view") === "pipeline" || window.location.hash === "#pipeline") {
+        useFlowStore.getState().setActiveViewMode("pipeline");
+      }
+    }
   }, [initFromStorage]);
 
   return (
@@ -21,19 +33,38 @@ export default function Home() {
       {/* 顶部导航栏 */}
       <Header />
 
-      {/* 主体工作台三段式布局 */}
-      <div className="flex flex-1 w-full h-[calc(100vh-3.5rem)] overflow-hidden relative">
-        {/* 左侧节点算子库 */}
-        <Sidebar />
-
-        {/* 中间 React Flow 交互画布 */}
-        <div className="flex-1 h-full relative">
-          <FlowCanvas />
+      {/* 主体工作区 */}
+      {activeViewMode === "dashboard" ? (
+        <div className="flex-1 w-full min-h-0 overflow-y-auto">
+          <QualityDashboardView />
         </div>
+      ) : (
+        /* 门禁策略编排三段式布局 */
+        <div className="flex flex-1 w-full min-h-0 overflow-hidden relative">
+          {/* 左侧节点算子库 */}
+          <Sidebar />
 
-        {/* 右侧属性与配置抽屉 */}
-        <PropertyDrawer />
-      </div>
+          {/* 中间 React Flow 交互画布 */}
+          <div className="flex-1 h-full relative min-w-0">
+            <FlowCanvas showMiniMap={showMiniMap} />
+          </div>
+
+          {/* 右侧属性与配置抽屉 */}
+          <PropertyDrawer />
+        </div>
+      )}
+
+      {/* 底部系统状态栏 */}
+      <StatusBar
+        showMiniMap={showMiniMap}
+        onToggleMiniMap={() => setShowMiniMap((v) => !v)}
+      />
+
+      {/* 实时 Git 提交门禁事件广播与浮动通知 */}
+      <LiveGuardFeed />
+
+      {/* 多项目研发质量大盘与提交审计日志 */}
+      <ProjectStatsModal />
 
       {/* 拓扑结构与 LangGraph JSON 预览模态框 */}
       <TopologyModal />

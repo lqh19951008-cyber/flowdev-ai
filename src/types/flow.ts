@@ -1,6 +1,8 @@
 import { Node, Edge } from "@xyflow/react";
 export type { Edge, Node };
 
+export type ActiveViewMode = "dashboard" | "pipeline";
+
 export type FlowNodeType =
   | "code_input"
   | "llm_review"
@@ -9,7 +11,7 @@ export type FlowNodeType =
 
 export type NodeExecutionStatus = "idle" | "running" | "completed" | "error";
 
-// --- Specialized Configurations for the 4 Nodes ---
+// --- Specialized Configurations for the 4 Policy Pipeline Nodes ---
 
 export interface CodeInputConfig {
   sourceType: "snippet" | "git";
@@ -17,6 +19,11 @@ export interface CodeInputConfig {
   sampleCode?: string;
   gitUrl?: string;
   gitBranch?: string;
+  // Enterprise Policy Fields
+  filePatterns?: string[];
+  ignoredDirs?: string[];
+  triggerEvent?: "pre-commit" | "pre-push" | "pull-request";
+  maxFileSizeKb?: number;
 }
 
 export interface LLMReviewConfig {
@@ -24,6 +31,12 @@ export interface LLMReviewConfig {
   temperature: number;
   promptTemplate: string;
   reviewAspects: string[];
+  // Enterprise Policy Fields
+  severityLevel?: "strict" | "standard" | "relaxed";
+  blockNullDeref?: boolean;
+  blockSqlInjection?: boolean;
+  blockHardcodedSecrets?: boolean;
+  blockDangerousEval?: boolean;
 }
 
 export interface TestGeneratorConfig {
@@ -31,12 +44,20 @@ export interface TestGeneratorConfig {
   targetCoverage: number;
   mockMode: boolean;
   promptTemplate?: string;
+  // Enterprise Policy Fields
+  enforceTests?: boolean;
+  sandboxTimeoutSec?: number;
+  selfCorrectionRetries?: number;
 }
 
 export interface DiffExportConfig {
   exportFormat: "unified_diff" | "git_patch" | "json_report";
   outputPath: string;
   autoApply: boolean;
+  // Enterprise Policy Fields
+  failureAction?: "block_commit" | "warn_only" | "create_review_pr";
+  notifyChannel?: "none" | "feishu" | "dingtalk" | "slack";
+  exportReport?: boolean;
 }
 
 export type AnyNodeConfig =
@@ -153,4 +174,37 @@ export interface WorkflowPreset {
   description: string;
   nodes: CustomNode[];
   edges: Edge[];
+}
+
+// --- Multi-Tenancy & Live Audit Types ---
+
+export interface ProjectItem {
+  id: string;
+  name: string;
+  description: string;
+  policy: Record<string, unknown>;
+  total_scans: number;
+  passed_scans: number;
+  pass_rate: number;
+  last_scan_at: string | null;
+}
+
+export interface ScanEventItem {
+  id: string;
+  project_id: string;
+  committer: string;
+  branch: string;
+  commit_hash?: string;
+  passed: boolean;
+  critical_issues: string[];
+  suggestions: string[];
+  summary: string;
+  files_count: number;
+  files?: Array<{
+    filename: string;
+    language: string;
+    length: number;
+    preview: string;
+  }>;
+  created_at: string;
 }

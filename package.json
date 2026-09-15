@@ -10,6 +10,7 @@
     "type-check": "tsc --noEmit",
     "install-hook": "node scripts/install-hook.js",
     "install-to": "node scripts/install-to.js",
+    "uninstall-from": "node scripts/uninstall-from.js",
     "hook-check": "node scripts/flowdev-hook.js"
   },
   "dependencies": {

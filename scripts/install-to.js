@@ -53,13 +53,34 @@ if (!fs.existsSync(hooksDir)) {
 
 // Absolute path to this FlowDev hook script
 const flowDevHookScript = path.resolve(__dirname, "flowdev-hook.js").replace(/\\/g, "/");
+const backupPath = hookPath + ".flowdev-orig";
 
-// Generate pre-commit hook content for the target repo
+let hasExistingHook = false;
+if (fs.existsSync(hookPath)) {
+  const existing = fs.readFileSync(hookPath, "utf-8");
+  if (!existing.includes("flowdev-hook.js")) {
+    hasExistingHook = true;
+    fs.writeFileSync(backupPath, existing, { encoding: "utf-8", mode: 0o755 });
+    console.log(`ℹ 检测到目标仓库已有原 pre-commit 钩子，已自动备份至: ${backupPath}`);
+  }
+}
+
+// Generate pre-commit hook content for the target repo with chain support
 const hookContent = `#!/bin/sh
-# FlowDev-AI External Pre-Commit Hook
-# Auto-installed by FlowDev-AI for project: ${path.basename(targetDir)}
+# FlowDev-AI Pre-Commit Guard (Local Personal Probe)
+# 100% 本地个人专属，不会被 Git 提交，对团队其他成员零污染、零感知
 
 node "${flowDevHookScript}"
+FLOWDEV_EXIT=$?
+
+if [ $FLOWDEV_EXIT -ne 0 ]; then
+  exit $FLOWDEV_EXIT
+fi
+
+# 若存在原先团队钩子 (如 husky/lint-staged)，无缝继续串联执行
+if [ -f "$0.flowdev-orig" ]; then
+  sh "$0.flowdev-orig" "$@"
+fi
 `;
 
 try {
@@ -68,11 +89,17 @@ try {
     fs.chmodSync(hookPath, 0o755);
   } catch (e) {}
 
-  console.log("\n✔ 成功为外部项目安装 FlowDev-AI 门禁钩子！");
+  console.log("\n✔ 成功为目标项目安装 FlowDev-AI 本地个人门禁！");
   console.log(`   钩子路径: ${hookPath}`);
   console.log(`   引用的审查引擎: ${flowDevHookScript}`);
-  console.log("\n🎉 即刻生效！只要 FlowDev 后端正在运行 (http://localhost:8000):");
-  console.log(`   在 ${path.basename(targetDir)} 目录执行 'git commit' 时即可享受全自动多 Agent 安全与单测门禁！\n`);
+  if (hasExistingHook) {
+    console.log(`   🔗 钩子串联: FlowDev-AI 审查通过后将自动执行原有的团队钩子，双重保障！`);
+  }
+  console.log("\n🔒 零污染保障说明:");
+  console.log("   1. 钩子位于 .git/hooks/ 内部，Git 默认忽略此目录，绝对不会被 git commit 提交到远程仓库；");
+  console.log("   2. 未向目标项目引入任何 npm 包，未修改 package.json，其他同事完全不受影响；");
+  console.log("   3. 若本地未启动 FlowDev-AI 服务，提交将自动静默放行，绝不阻碍正常研发；");
+  console.log("   4. 随时可通过 'node scripts/uninstall-from.js <路径>' 一键无痕卸载。\n");
 } catch (err) {
   console.error(`\n❌ 安装失败: ${err.message}`);
   process.exit(1);

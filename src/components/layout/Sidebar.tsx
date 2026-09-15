@@ -19,34 +19,34 @@ import { cn } from "@/lib/utils";
 const PALETTE_ITEMS: NodePaletteItem[] = [
   {
     type: "code_input",
-    label: "CodeInputNode",
-    description: "源码输入：支持单文件或 Git PR 变更",
+    label: "门禁触发与范围 (Scope)",
+    description: "捕获 pre-commit/PR，匹配 Glob 路径过滤变更文件",
     category: "input",
-    tag: "输入",
+    tag: "触发范围",
     iconName: "FileCode2",
   },
   {
     type: "llm_review",
-    label: "LLMReviewNode",
-    description: "代码评审：DeepSeek-V3 深度扫描异味与漏洞",
+    label: "代码安全与漏洞阻断 (Security)",
+    description: "DeepSeek 语义扫描，阻断空指针/SQL注入/秘钥泄露",
     category: "agent",
-    tag: "审查",
+    tag: "安全阻断",
     iconName: "Sparkles",
   },
   {
     type: "test_generator",
-    label: "TestGeneratorNode",
-    description: "单测生成：自动化生成 Jest / PyTest 单测",
+    label: "单测覆盖率红线卡点 (Coverage)",
+    description: "执行自动化单测验证，覆盖率需 ≥80% 红线",
     category: "agent",
-    tag: "单测",
+    tag: "单测卡点",
     iconName: "TestTube2",
   },
   {
     type: "diff_export",
-    label: "DiffExportNode",
-    description: "差异导出：生成 Unified Diff 补丁与报告",
+    label: "门禁裁决与阻断决策 (Enforce)",
+    description: "评估裁决：Exit 1 强行阻断提交 / 告警推送 / 补丁修复",
     category: "output",
-    tag: "产出",
+    tag: "阻断裁决",
     iconName: "GitCompare",
   },
 ];
@@ -103,14 +103,14 @@ export function Sidebar() {
   return (
     <aside
       className={cn(
-        "relative h-[calc(100vh-3.5rem)] z-20 select-none border-r border-slate-800 bg-slate-950/95 backdrop-blur transition-all duration-300 ease-in-out flex flex-col shrink-0 overflow-hidden",
+        "relative h-full z-20 select-none border-r border-slate-800/90 bg-slate-950/95 backdrop-blur transition-all duration-300 ease-in-out flex flex-col shrink-0 overflow-hidden",
         isSidebarOpen ? "w-[220px]" : "w-12"
       )}
     >
       {/* Header & Fold Toggle */}
       <div
         className={cn(
-          "h-11 border-b border-slate-800/80 bg-slate-900/40 flex items-center shrink-0 px-2.5",
+          "h-10 border-b border-slate-800/80 bg-slate-900/40 flex items-center shrink-0 px-2.5",
           isSidebarOpen ? "justify-between" : "justify-center"
         )}
       >
@@ -180,10 +180,10 @@ export function Sidebar() {
         </div>
       ) : (
         /* Expanded State: 220px Compact Cards List */
-        <div className="flex-1 overflow-y-auto p-2.5 space-y-2">
+        <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
           <div className="text-[10px] text-slate-500 px-1 font-mono flex items-center justify-between">
-            <span>按住卡片拖入画布</span>
-            <span>4 个可用</span>
+            <span>按住拖入画布</span>
+            <span>4 个算子</span>
           </div>
 
           {PALETTE_ITEMS.map((item) => {
@@ -206,7 +206,7 @@ export function Sidebar() {
                 onDragEnd={onDragEnd}
                 onClick={() => handleClickAdd(item.type)}
                 className={cn(
-                  "group relative p-2.5 rounded-lg border bg-slate-900/50 hover:bg-slate-900 border-slate-800/90 hover:border-slate-700 cursor-grab active:cursor-grabbing transition-all duration-150 shadow-sm",
+                  "group relative p-2 rounded-lg border bg-slate-900/50 hover:bg-slate-900 border-slate-800/90 hover:border-slate-700 cursor-grab active:cursor-grabbing transition-all duration-150 shadow-sm",
                   draggedType === item.type && "opacity-50 border-blue-500"
                 )}
               >

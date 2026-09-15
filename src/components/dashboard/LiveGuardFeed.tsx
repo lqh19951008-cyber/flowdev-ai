@@ -1,0 +1,314 @@
+"use client";
+
+import React, { useEffect, useState } from "react";
+import {
+  ShieldAlert,
+  ShieldCheck,
+  X,
+  ExternalLink,
+  GitBranch,
+  User,
+  Clock,
+  Radio,
+  FileCode,
+} from "lucide-react";
+import { useFlowStore } from "@/stores/useFlowStore";
+import { ScanEventItem } from "@/types/flow";
+import { cn } from "@/lib/utils";
+
+export function LiveGuardFeed() {
+  const {
+    addLiveEvent,
+    recentEvents,
+    unreadEventsCount,
+    clearUnreadEventsCount,
+    isLiveFeedOpen,
+    setLiveFeedOpen,
+    setSelectedProjectId,
+    setProjectStatsModalOpen,
+  } = useFlowStore();
+
+  const [activeToast, setActiveToast] = useState<ScanEventItem | null>(null);
+  const [toastVisible, setToastVisible] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
+
+  // SSE Listener for real-time audit scan events
+  useEffect(() => {
+    let eventSource: EventSource | null = null;
+    let retryTimeout: NodeJS.Timeout | null = null;
+
+    function connectSSE() {
+      try {
+        eventSource = new EventSource("http://127.0.0.1:8000/api/events/stream");
+
+        eventSource.onopen = () => {
+          setIsConnected(true);
+        };
+
+        eventSource.addEventListener("connected", () => {
+          setIsConnected(true);
+        });
+
+        eventSource.addEventListener("scan_completed", (e: MessageEvent) => {
+          try {
+            const data: ScanEventItem = JSON.parse(e.data);
+            addLiveEvent(data);
+
+            // Trigger floating live toast
+            setActiveToast(data);
+            setToastVisible(true);
+          } catch (err) {
+            console.error("Failed to parse scan_completed SSE packet", err);
+          }
+        });
+
+        eventSource.onerror = () => {
+          setIsConnected(false);
+          eventSource?.close();
+          retryTimeout = setTimeout(connectSSE, 4000);
+        };
+      } catch (err) {
+        setIsConnected(false);
+        retryTimeout = setTimeout(connectSSE, 4000);
+      }
+    }
+
+    connectSSE();
+
+    return () => {
+      if (eventSource) eventSource.close();
+      if (retryTimeout) clearTimeout(retryTimeout);
+    };
+  }, [addLiveEvent]);
+
+  // Auto hide floating toast after 7 seconds
+  useEffect(() => {
+    if (toastVisible && activeToast) {
+      const timer = setTimeout(() => {
+        setToastVisible(false);
+      }, 7000);
+      return () => clearTimeout(timer);
+    }
+  }, [toastVisible, activeToast]);
+
+  return (
+    <>
+      {/* Real-time Floating Toast for Incoming Git Commit */}
+      {toastVisible && activeToast && (
+        <div className="fixed top-16 right-5 z-50 max-w-md w-full animate-in slide-in-from-top-4 fade-in duration-200">
+          <div
+            className={cn(
+              "rounded-xl border p-4 shadow-2xl backdrop-blur-md transition-all",
+              activeToast.passed
+                ? "bg-slate-950/95 border-emerald-500/40 shadow-emerald-500/10"
+                : "bg-slate-950/95 border-rose-500/50 shadow-rose-500/20"
+            )}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div
+                  className={cn(
+                    "p-2 rounded-lg",
+                    activeToast.passed
+                      ? "bg-emerald-500/10 text-emerald-400"
+                      : "bg-rose-500/15 text-rose-400 animate-pulse"
+                  )}
+                >
+                  {activeToast.passed ? (
+                    <ShieldCheck className="h-5 w-5" />
+                  ) : (
+                    <ShieldAlert className="h-5 w-5" />
+                  )}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-sm text-slate-100">
+                      {activeToast.passed ? "门禁检查通过放行" : "代码门禁拦截提交！"}
+                    </span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-cyan-300 font-mono">
+                      {activeToast.project_id}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5 line-clamp-1">
+                    {activeToast.summary}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setToastVisible(false)}
+                className="text-slate-500 hover:text-slate-300 p-1"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Committer and branch details */}
+            <div className="mt-3 flex items-center gap-3 text-[11px] text-slate-400 font-mono border-t border-slate-800/80 pt-2">
+              <span className="flex items-center gap-1">
+                <User className="h-3 w-3 text-slate-500" />
+                {activeToast.committer}
+              </span>
+              <span className="flex items-center gap-1">
+                <GitBranch className="h-3 w-3 text-slate-500" />
+                {activeToast.branch}
+              </span>
+              <button
+                onClick={() => {
+                  setToastVisible(false);
+                  setSelectedProjectId(activeToast.project_id);
+                  setProjectStatsModalOpen(true);
+                }}
+                className="ml-auto text-blue-400 hover:text-blue-300 flex items-center gap-1 font-sans"
+              >
+                查看详情
+                <ExternalLink className="h-3 w-3" />
+              </button>
+            </div>
+
+            {/* Defects preview if failed */}
+            {!activeToast.passed && activeToast.critical_issues.length > 0 && (
+              <div className="mt-2.5 p-2 rounded bg-rose-500/10 border border-rose-500/20 text-[11px] text-rose-300 space-y-1">
+                <div className="font-semibold text-rose-200">
+                  发现 {activeToast.critical_issues.length} 项致命阻断缺陷:
+                </div>
+                {activeToast.critical_issues.slice(0, 2).map((issue, idx) => (
+                  <div key={idx} className="line-clamp-1 text-slate-300 font-mono">
+                    • {issue}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Live Feed Popover Drawer (when user clicks Notification Bell in Header) */}
+      {isLiveFeedOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-slate-950/40 backdrop-blur-sm"
+          onClick={() => {
+            setLiveFeedOpen(false);
+            clearUnreadEventsCount();
+          }}
+        >
+          <div
+            className="absolute top-14 right-4 w-96 max-h-[80vh] rounded-2xl border border-slate-800 bg-slate-950/95 shadow-2xl p-4 flex flex-col z-50"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5">
+                  <Radio
+                    className={cn(
+                      "h-4 w-4",
+                      isConnected ? "text-emerald-400 animate-pulse" : "text-amber-500"
+                    )}
+                  />
+                  <span className="font-bold text-sm text-slate-100">实时门禁动态</span>
+                </div>
+                <span
+                  className={cn(
+                    "text-[10px] px-1.5 py-0.5 rounded-full",
+                    isConnected
+                      ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                      : "bg-amber-500/10 text-amber-400"
+                  )}
+                >
+                  {isConnected ? "SSE 实时监听中" : "连接重试中"}
+                </span>
+              </div>
+              <button
+                onClick={() => {
+                  setLiveFeedOpen(false);
+                  clearUnreadEventsCount();
+                }}
+                className="text-slate-400 hover:text-slate-200 p-1"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Event List */}
+            <div className="flex-1 overflow-y-auto space-y-2 py-3 pr-1">
+              {recentEvents.length === 0 ? (
+                <div className="text-center py-8 text-slate-500 text-xs">
+                  暂无拦截事件记录。在任何接入项目中运行 git commit 将在此实时播报。
+                </div>
+              ) : (
+                recentEvents.map((event) => (
+                  <div
+                    key={event.id}
+                    onClick={() => {
+                      setSelectedProjectId(event.project_id);
+                      setLiveFeedOpen(false);
+                      setProjectStatsModalOpen(true);
+                    }}
+                    className={cn(
+                      "p-2.5 rounded-xl border text-xs cursor-pointer transition-all hover:scale-[1.01]",
+                      event.passed
+                        ? "bg-slate-900/60 border-slate-800 hover:border-emerald-500/30"
+                        : "bg-rose-950/20 border-rose-900/40 hover:border-rose-500/50"
+                    )}
+                  >
+                    <div className="flex items-center justify-between gap-1 mb-1">
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className={cn(
+                            "px-1.5 py-0.5 rounded text-[10px] font-semibold",
+                            event.passed
+                              ? "bg-emerald-500/15 text-emerald-400"
+                              : "bg-rose-500/15 text-rose-400"
+                          )}
+                        >
+                          {event.passed ? "放行" : "拦截"}
+                        </span>
+                        <span className="font-mono text-cyan-400 font-medium">
+                          {event.project_id}
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-slate-500 flex items-center gap-1">
+                        <Clock className="h-2.5 w-2.5" />
+                        {new Date(event.created_at).toLocaleTimeString()}
+                      </span>
+                    </div>
+
+                    <p className="text-slate-300 line-clamp-1 text-[11px] mb-1.5">
+                      {event.summary}
+                    </p>
+
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono">
+                      <span>{event.committer}</span>
+                      <span className="flex items-center gap-1">
+                        <FileCode className="h-3 w-3 text-slate-500" />
+                        {event.files_count} 文件
+                      </span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="pt-2 border-t border-slate-800 flex justify-between items-center">
+              <span className="text-[11px] text-slate-500">
+                最近 {recentEvents.length} 次审查事件
+              </span>
+              <button
+                onClick={() => {
+                  setLiveFeedOpen(false);
+                  setProjectStatsModalOpen(true);
+                }}
+                className="text-xs text-blue-400 hover:text-blue-300 font-medium flex items-center gap-1"
+              >
+                打开大盘查看全部
+                <ExternalLink className="h-3 w-3" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}

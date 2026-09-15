@@ -138,10 +138,53 @@ function getUnstagedCodeFiles() {
   }
 }
 
+function getGitMetadata() {
+  let project_id = "default-project";
+  let branch = "main";
+  let committer = "developer";
+
+  try {
+    const topLevel = execSync("git rev-parse --show-toplevel", {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "ignore"],
+    }).trim();
+    if (topLevel) {
+      project_id = path.basename(topLevel);
+    }
+  } catch (e) {}
+
+  try {
+    const b = execSync("git rev-parse --abbrev-ref HEAD", {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "ignore"],
+    }).trim();
+    if (b) branch = b;
+  } catch (e) {}
+
+  try {
+    const email = execSync("git config user.email", {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "ignore"],
+    }).trim();
+    const name = execSync("git config user.name", {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "ignore"],
+    }).trim();
+    if (email) {
+      committer = name ? `${name} <${email}>` : email;
+    } else if (name) {
+      committer = name;
+    }
+  } catch (e) {}
+
+  return { project_id, branch, committer };
+}
+
 async function main() {
   printBanner();
   const stagedFiles = getStagedCodeFiles();
   const unstagedFiles = getUnstagedCodeFiles();
+  const { project_id, branch, committer } = getGitMetadata();
 
   // If no code changes in staged index, inform user and exit 0
   if (stagedFiles.length === 0) {
@@ -162,7 +205,7 @@ async function main() {
   }
 
   console.log(
-    `\n🔍 检测到暂存区包含 ${c.bold}${stagedFiles.length}${c.reset} 个待提交源码文件:`
+    `\n🔍 检测到暂存区包含 ${c.bold}${stagedFiles.length}${c.reset} 个待提交源码文件 (项目: ${c.cyan}${project_id}${c.reset}, 分支: ${c.magenta}${branch}${c.reset}, 提交人: ${committer}):`
   );
   stagedFiles.forEach((f) => console.log(`   ${c.dim}•${c.reset} ${f}`));
 
@@ -184,6 +227,9 @@ async function main() {
   let scanResult;
   try {
     scanResult = await postJson(API_HOST, API_PORT, API_PATH, {
+      project_id,
+      branch,
+      committer,
       files: filesPayload,
     });
   } catch (err) {
