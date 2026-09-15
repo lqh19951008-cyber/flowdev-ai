@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { HeroUIProvider } from "@/components/providers/HeroUIProvider";
 
 export const metadata: Metadata = {
-  title: "FlowDev-AI | 可视化多 Agent 代码审查与自动化单测平台",
-  description: "基于 Web 可视化节点流的多 Agent 代码审查与自动化单测生成平台",
+  title: "FlowDev-AI | 企业研发效能与代码门禁管控中台",
+  description: "基于 HeroUI 与 Kahn DAG 拓扑编排的轻量高效代码门禁管控系统",
 };
 
 export default function RootLayout({
@@ -12,9 +13,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="zh-CN" className="dark">
-      <body className="antialiased bg-slate-950 text-slate-100 min-h-screen flex flex-col">
-        {children}
+    <html lang="zh-CN" suppressHydrationWarning>
+      <body className="antialiased min-h-screen flex flex-col transition-colors duration-200">
+        <HeroUIProvider>
+          {children}
+        </HeroUIProvider>
       </body>
     </html>
   );

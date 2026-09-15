@@ -16,18 +16,18 @@ const modelLabels: Record<string, string> = {
 const severityBadges: Record<string, { label: string; color: string; border: string }> = {
   strict: {
     label: "🚨 极严阻断 (Exit 1)",
-    color: "text-rose-300 bg-rose-500/10",
-    border: "border-rose-500/30",
+    color: "text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-500/10",
+    border: "border-rose-200 dark:border-rose-500/30",
   },
   standard: {
     label: "🛡️ 企业标准阻断",
-    color: "text-purple-300 bg-purple-500/10",
-    border: "border-purple-500/30",
+    color: "text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-500/10",
+    border: "border-purple-200 dark:border-purple-500/30",
   },
   relaxed: {
     label: "⚠️ 宽松告警",
-    color: "text-amber-300 bg-amber-500/10",
-    border: "border-amber-500/30",
+    color: "text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10",
+    border: "border-amber-200 dark:border-amber-500/30",
   },
 };
 
@@ -53,13 +53,13 @@ export const LLMReviewNode = memo(({ id, data, selected }: NodeProps<CustomNode>
       typeBadge="SECURITY_GUARD"
       status={nodeData.status || "idle"}
       icon={Sparkles}
-      iconColor="text-purple-400"
+      iconColor="text-purple-500 dark:text-purple-400"
       iconBg="bg-purple-500/15 border-purple-500/30"
       hasTargetHandle={true}
       hasSourceHandle={true}
     >
       <div className="flex items-center justify-between text-[11px] font-mono">
-        <span className="flex items-center gap-1 text-purple-300 bg-purple-500/10 px-2 py-0.5 rounded border border-purple-500/20">
+        <span className="flex items-center gap-1 text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-500/10 px-2 py-0.5 rounded border border-purple-200 dark:border-purple-500/20 font-medium">
           <Cpu className="h-3 w-3" />
           {modelLabels[model] || model}
         </span>
@@ -71,30 +71,29 @@ export const LLMReviewNode = memo(({ id, data, selected }: NodeProps<CustomNode>
       </div>
 
       <div className="space-y-1">
-        <div className="text-[10px] text-slate-400 flex items-center gap-1">
-          <ShieldAlert className="h-3 w-3 text-rose-400 shrink-0" />
+        <div className="text-[10px] text-slate-500 dark:text-slate-400 flex items-center gap-1">
+          <ShieldAlert className="h-3 w-3 text-rose-500 dark:text-rose-400 shrink-0" />
           <span>专项防御红线 ({rules.length} 条已激活):</span>
         </div>
         <div className="flex items-center gap-1 flex-wrap">
           {rules.map((rule) => (
             <span
               key={rule}
-              className="text-[10px] px-1.5 py-0.5 rounded bg-slate-950/80 text-rose-300/90 border border-rose-500/20 font-mono flex items-center gap-0.5"
+              className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-950/80 text-rose-700 dark:text-rose-300/90 border border-rose-200 dark:border-rose-500/20 font-mono flex items-center gap-0.5 font-medium"
             >
-              <ShieldCheck className="h-2.5 w-2.5 text-rose-400" />
+              <ShieldCheck className="h-2.5 w-2.5 text-rose-500 dark:text-rose-400" />
               {rule}
             </span>
           ))}
         </div>
       </div>
 
-      <div className="flex items-center justify-between text-[10px] text-slate-400 pt-0.5">
-        <span className="text-purple-400 font-medium">语义推演</span>
-        <span className="font-mono text-slate-500">发现致命漏洞掐断提交</span>
+      <div className="flex items-center justify-between text-[10px] text-slate-500 dark:text-slate-400 pt-0.5">
+        <span className="text-purple-600 dark:text-purple-400 font-medium">语义推演</span>
+        <span className="font-mono text-slate-400 dark:text-slate-500">发现致命漏洞掐断提交</span>
       </div>
     </BaseNodeCard>
   );
 });
 
 LLMReviewNode.displayName = "LLMReviewNode";
-

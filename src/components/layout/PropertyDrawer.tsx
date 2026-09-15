@@ -6,7 +6,6 @@ import {
   Sliders,
   Trash2,
   Cpu,
-  Settings2,
   FileCode2,
   Sparkles,
   TestTube2,
@@ -18,8 +17,28 @@ import {
   AlertTriangle,
   Lock,
   ChevronDown,
-  BellRing,
+  Play,
+  Layers,
+  BookOpen,
+  Info,
+  CheckCircle2,
 } from "lucide-react";
+import {
+  Input,
+  Textarea,
+  Select,
+  SelectItem,
+  Switch,
+  Slider,
+  Button,
+  Tabs,
+  Tab,
+  Card,
+  CardBody,
+  CardHeader,
+  Chip,
+  Divider,
+} from "@heroui/react";
 import { useFlowStore } from "@/stores/useFlowStore";
 import {
   CodeInputConfig,
@@ -27,6 +46,7 @@ import {
   TestGeneratorConfig,
   DiffExportConfig,
   FlowNodeData,
+  FlowNodeType,
 } from "@/types/flow";
 import { cn } from "@/lib/utils";
 
@@ -38,6 +58,51 @@ const REVIEW_ASPECT_OPTIONS = [
   "性能瓶颈",
   "边界条件",
 ];
+
+const NODE_TYPE_META: Record<
+  FlowNodeType,
+  {
+    title: string;
+    tag: string;
+    color: "warning" | "secondary" | "success" | "primary";
+    icon: React.ElementType;
+    bgLight: string;
+    textLight: string;
+  }
+> = {
+  code_input: {
+    title: "触发范围与过滤",
+    tag: "Scope & Filter",
+    color: "warning",
+    icon: FileCode2,
+    bgLight: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+    textLight: "text-amber-600 dark:text-amber-400",
+  },
+  llm_review: {
+    title: "代码安全与审查",
+    tag: "Security & Rules",
+    color: "secondary",
+    icon: Sparkles,
+    bgLight: "bg-purple-500/10 text-purple-600 dark:text-purple-400",
+    textLight: "text-purple-600 dark:text-purple-400",
+  },
+  test_generator: {
+    title: "单测覆盖率卡点",
+    tag: "Tests & Coverage",
+    color: "success",
+    icon: TestTube2,
+    bgLight: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+    textLight: "text-emerald-600 dark:text-emerald-400",
+  },
+  diff_export: {
+    title: "门禁决策与产物",
+    tag: "Enforce & Output",
+    color: "primary",
+    icon: GitCompare,
+    bgLight: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+    textLight: "text-blue-600 dark:text-blue-400",
+  },
+};
 
 export function PropertyDrawer() {
   const {
@@ -51,11 +116,16 @@ export function PropertyDrawer() {
     edges,
     setEdges,
     nodeLogs,
+    setNodeStatus,
+    appendNodeLog,
   } = useFlowStore();
 
-  // Local state for debounced updates
-  const [localData, setLocalData] = useState<FlowNodeData | null>(null);
+  const [activeTab, setActiveTab] = useState<string>("config");
+  const [localData, setLocalData] = useState<FlowNodeData | null>(() => selectedNode?.data || null);
+  const [isSandboxOpen, setIsSandboxOpen] = useState<boolean>(false);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const activeData = localData || selectedNode?.data || null;
 
   useEffect(() => {
     if (selectedNode) {
@@ -65,7 +135,7 @@ export function PropertyDrawer() {
     }
   }, [selectedNode?.id]);
 
-  // Support pressing Esc key to close the drawer
+  // Support pressing Esc key to close drawer
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape" && isDrawerOpen) {
@@ -89,26 +159,29 @@ export function PropertyDrawer() {
   };
 
   const handleFieldChange = (key: keyof FlowNodeData, value: unknown) => {
-    if (!localData || !selectedNode) return;
-    const updated = { ...localData, [key]: value };
+    if (!selectedNode) return;
+    const current = localData || selectedNode.data;
+    const updated: FlowNodeData = { ...current, [key]: value };
     setLocalData(updated);
     syncToStore({ [key]: value });
   };
 
   const handleConfigChange = (configKey: string, value: unknown) => {
-    if (!localData || !selectedNode) return;
+    if (!selectedNode) return;
+    const current = localData || selectedNode.data;
     const updatedConfig = {
-      ...(localData.config || {}),
+      ...(current.config || {}),
       [configKey]: value,
     };
-    const updatedData = { ...localData, config: updatedConfig };
+    const updatedData: FlowNodeData = { ...current, config: updatedConfig };
     setLocalData(updatedData);
     syncToStore({ config: updatedConfig });
   };
 
   const toggleAspect = (aspect: string) => {
-    if (!localData || !selectedNode) return;
-    const currentConfig = (localData.config || {}) as Partial<LLMReviewConfig>;
+    if (!selectedNode) return;
+    const current = localData || selectedNode.data;
+    const currentConfig = (current.config || {}) as Partial<LLMReviewConfig>;
     const currentAspects = currentConfig.reviewAspects || [];
     const newAspects = currentAspects.includes(aspect)
       ? currentAspects.filter((a) => a !== aspect)
@@ -125,768 +198,1104 @@ export function PropertyDrawer() {
       )
     );
     setSelectedNode(null);
+    toggleDrawer(false);
   };
+
+  const handleSimulateCurrentNode = () => {
+    if (!selectedNode || !activeData) return;
+    setNodeStatus(selectedNode.id, "running");
+    appendNodeLog(
+      selectedNode.id,
+      `[SIMULATE] 启动单算子推演实测: ${activeData.label}`
+    );
+    setTimeout(() => {
+      appendNodeLog(
+        selectedNode.id,
+        `[SUCCESS] 规则推演与沙箱断言验证通过 (耗时 38ms)`
+      );
+      setNodeStatus(selectedNode.id, "completed");
+    }, 650);
+  };
+
+  const nodeMeta = selectedNode
+    ? NODE_TYPE_META[selectedNode.type as FlowNodeType] || {
+        title: "算子属性",
+        tag: "Node",
+        color: "primary" as const,
+        icon: Sliders,
+        bgLight: "bg-blue-500/10 text-blue-600",
+        textLight: "text-blue-600",
+      }
+    : null;
+
+  const currentLogs = selectedNode ? nodeLogs[selectedNode.id] || [] : [];
 
   return (
     <aside
       className={cn(
-        "absolute right-0 top-0 bottom-0 z-30 w-[360px] max-w-[30vw] border-l border-slate-800/90 bg-slate-950/95 backdrop-blur-md shadow-2xl transition-all duration-300 ease-in-out flex flex-col select-none",
+        "absolute right-0 top-0 bottom-0 z-30 w-[420px] max-w-[90vw] md:max-w-[420px] border-l border-slate-200/90 dark:border-slate-800/90 bg-white/95 dark:bg-[#0d131f]/95 backdrop-blur-md shadow-2xl transition-all duration-300 ease-in-out flex flex-col select-none",
         isDrawerOpen
           ? "translate-x-0 opacity-100 pointer-events-auto"
           : "translate-x-full opacity-0 pointer-events-none"
       )}
     >
-      {/* Header */}
-      <div className="h-11 px-3 border-b border-slate-800 bg-slate-900/60 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-1.5 min-w-0">
-          <Sliders className="h-3.5 w-3.5 text-blue-400 shrink-0" />
-          <span className="text-xs font-semibold text-slate-200 truncate">
-            {selectedNode ? "节点属性配置" : "工作流全局配置"}
-          </span>
+      {/* Drawer Header */}
+      <div className="h-14 px-4 border-b border-slate-200/90 dark:border-slate-800/90 bg-slate-50/70 dark:bg-slate-900/60 flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-2.5 min-w-0">
+          {nodeMeta ? (
+            <div
+              className={cn(
+                "h-8 w-8 rounded-xl flex items-center justify-center shrink-0 shadow-xs",
+                nodeMeta.bgLight
+              )}
+            >
+              <nodeMeta.icon className="h-4 w-4" />
+            </div>
+          ) : (
+            <div className="h-8 w-8 rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
+              <Workflow className="h-4 w-4" />
+            </div>
+          )}
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-slate-800 dark:text-slate-100 truncate">
+                {selectedNode ? activeData?.label || "算子节点" : "工作流全局配置"}
+              </span>
+              {nodeMeta && (
+                <Chip
+                  size="sm"
+                  variant="flat"
+                  color={nodeMeta.color}
+                  className="h-5 text-[10px] font-mono px-1.5"
+                >
+                  {nodeMeta.tag}
+                </Chip>
+              )}
+            </div>
+            <div className="text-[10px] text-slate-400 truncate">
+              {selectedNode
+                ? `ID: ${selectedNode.id}`
+                : "FastAPI + Kahn DAG 调度策略"}
+            </div>
+          </div>
         </div>
+
         <button
           onClick={() => {
             toggleDrawer(false);
             setSelectedNode(null);
           }}
-          className="p-1 rounded-md text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-colors"
+          className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-slate-100 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors"
           title="收起抽屉 (Esc)"
         >
           <X className="h-4 w-4" />
         </button>
       </div>
 
+      {/* Top Segmented Navigation Tabs */}
+      {selectedNode && (
+        <div className="px-4 pt-2.5 pb-1 border-b border-slate-200/70 dark:border-slate-800/70 bg-white/50 dark:bg-slate-900/30">
+          <Tabs
+            size="sm"
+            fullWidth
+            variant="underlined"
+            color="primary"
+            selectedKey={activeTab}
+            onSelectionChange={(k) => setActiveTab(k as string)}
+            classNames={{
+              tabList: "gap-4 border-b-0",
+              cursor: "w-full bg-blue-500",
+              tab: "h-8 px-2 text-xs font-semibold data-[selected=true]:text-blue-600 dark:data-[selected=true]:text-blue-400",
+            }}
+          >
+            <Tab
+              key="config"
+              title={
+                <div className="flex items-center gap-1.5">
+                  <Sliders className="h-3.5 w-3.5" />
+                  <span>策略参数</span>
+                </div>
+              }
+            />
+            <Tab
+              key="logs"
+              title={
+                <div className="flex items-center gap-1.5">
+                  <Terminal className="h-3.5 w-3.5" />
+                  <span>推演日志</span>
+                  {currentLogs.length > 0 && (
+                    <Chip size="sm" variant="solid" color="primary" className="h-4 px-1 text-[9px] font-mono">
+                      {currentLogs.length}
+                    </Chip>
+                  )}
+                </div>
+              }
+            />
+            <Tab
+              key="guide"
+              title={
+                <div className="flex items-center gap-1.5">
+                  <BookOpen className="h-3.5 w-3.5" />
+                  <span>算子标准</span>
+                </div>
+              }
+            />
+          </Tabs>
+        </div>
+      )}
+
       {/* Content Body */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-3">
-        {selectedNode && localData ? (
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {selectedNode && activeData ? (
           <>
-            {/* Common Info */}
-            <div className="space-y-2">
-              <div>
-                <label className="text-[10px] font-medium text-slate-400 mb-0.5 block">
-                  节点名称 (Label)
-                </label>
-                <input
-                  type="text"
-                  value={localData.label || ""}
-                  onChange={(e) => handleFieldChange("label", e.target.value)}
-                  className="w-full px-2.5 py-1 text-xs bg-slate-900 border border-slate-800 rounded-md text-slate-200 focus:outline-none focus:border-blue-500 font-medium"
-                />
-              </div>
-
-              <div>
-                <label className="text-[10px] font-medium text-slate-400 mb-0.5 block">
-                  功能描述
-                </label>
-                <textarea
-                  rows={2}
-                  value={localData.description || ""}
-                  onChange={(e) =>
-                    handleFieldChange("description", e.target.value)
-                  }
-                  className="w-full px-2.5 py-1 text-xs bg-slate-900 border border-slate-800 rounded-md text-slate-300 placeholder-slate-500 focus:outline-none focus:border-blue-500 resize-none leading-snug"
-                />
-              </div>
-            </div>
-
-            {/* Custom Node Specific Configs */}
-            {selectedNode.type === "code_input" && (
-              <div className="pt-2.5 border-t border-slate-800/80 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-semibold text-amber-400 uppercase tracking-wider flex items-center gap-1">
-                    <FileCode2 className="h-3 w-3" />
-                    门禁触发范围与过滤策略
-                  </span>
-                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 text-amber-300 font-mono">
-                    Scope & Filter
-                  </span>
-                </div>
-
-                <div>
-                  <label className="text-[10px] font-medium text-slate-400 mb-0.5 block">
-                    门禁触发时机 (Git Hook Event)
-                  </label>
-                  <select
-                    value={(localData.config as CodeInputConfig)?.triggerEvent || "pre-commit"}
-                    onChange={(e) =>
-                      handleConfigChange("triggerEvent", e.target.value)
-                    }
-                    className="w-full px-2 py-1 text-xs bg-slate-900 border border-slate-800 rounded-md text-slate-200 focus:outline-none focus:border-amber-500 font-medium"
-                  >
-                    <option value="pre-commit">pre-commit (本地提交前拦截 · 毫秒级推荐)</option>
-                    <option value="pre-push">pre-push (推送到远程分支前拦截)</option>
-                    <option value="pull-request">pull-request (CI / PR 合入前门禁卡点)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-[10px] font-medium text-slate-400 mb-0.5 block">
-                    主要开发语言
-                  </label>
-                  <select
-                    value={(localData.config as CodeInputConfig)?.language || "typescript"}
-                    onChange={(e) =>
-                      handleConfigChange("language", e.target.value)
-                    }
-                    className="w-full px-2 py-1 text-xs bg-slate-900 border border-slate-800 rounded-md text-slate-200 focus:outline-none focus:border-amber-500 font-mono"
-                  >
-                    <option value="typescript">TypeScript (.ts/.tsx)</option>
-                    <option value="javascript">JavaScript (.js/.jsx)</option>
-                    <option value="python">Python (.py)</option>
-                    <option value="go">Go (.go)</option>
-                    <option value="java">Java (.java)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-[10px] font-medium text-slate-400 mb-0.5 block">
-                    拦截文件匹配模式 (Glob 表达式)
-                  </label>
-                  <input
-                    type="text"
-                    value={
-                      Array.isArray((localData.config as CodeInputConfig)?.filePatterns)
-                        ? (localData.config as CodeInputConfig).filePatterns!.join(", ")
-                        : "**/*.ts, **/*.tsx, **/*.js, **/*.jsx, **/*.py"
-                    }
-                    onChange={(e) =>
-                      handleConfigChange(
-                        "filePatterns",
-                        e.target.value.split(",").map((s) => s.trim()).filter(Boolean)
-                      )
-                    }
-                    placeholder="**/*.ts, **/*.py"
-                    className="w-full px-2.5 py-1 text-xs bg-slate-900 border border-slate-800 rounded-md text-slate-200 font-mono focus:outline-none focus:border-amber-500"
-                  />
-                  <span className="text-[10px] text-slate-500 mt-0.5 block">
-                    多个模式用英文逗号分隔，仅匹配的文件会触发门禁扫描
-                  </span>
-                </div>
-
-                <div>
-                  <label className="text-[10px] font-medium text-slate-400 mb-0.5 block">
-                    排除/忽略目录 (Ignored Dirs)
-                  </label>
-                  <input
-                    type="text"
-                    value={
-                      Array.isArray((localData.config as CodeInputConfig)?.ignoredDirs)
-                        ? (localData.config as CodeInputConfig).ignoredDirs!.join(", ")
-                        : "node_modules, dist, .next, build, coverage"
-                    }
-                    onChange={(e) =>
-                      handleConfigChange(
-                        "ignoredDirs",
-                        e.target.value.split(",").map((s) => s.trim()).filter(Boolean)
-                      )
-                    }
-                    placeholder="node_modules, dist, build"
-                    className="w-full px-2.5 py-1 text-xs bg-slate-900 border border-slate-800 rounded-md text-slate-200 font-mono focus:outline-none focus:border-amber-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-[10px] font-medium text-slate-400 mb-0.5 block">
-                    单文件扫描大小上限 (KB)
-                  </label>
-                  <input
-                    type="number"
-                    min={50}
-                    max={5000}
-                    step={50}
-                    value={(localData.config as CodeInputConfig)?.maxFileSizeKb ?? 500}
-                    onChange={(e) =>
-                      handleConfigChange(
-                        "maxFileSizeKb",
-                        parseInt(e.target.value, 10) || 500
-                      )
-                    }
-                    className="w-full px-2.5 py-1 text-xs bg-slate-900 border border-slate-800 rounded-md text-slate-200 font-mono focus:outline-none focus:border-amber-500"
-                  />
-                </div>
-
-                {/* Collapsible Sandbox Mock Code for UI Testing */}
-                <details className="border border-slate-800 rounded-lg p-2 bg-slate-900/40 group">
-                  <summary className="text-[11px] text-amber-300 font-medium cursor-pointer select-none list-none flex items-center justify-between">
-                    <span className="flex items-center gap-1.5">
-                      <ChevronDown className="h-3 w-3 group-open:rotate-180 transition-transform text-slate-400" />
-                      仿真测试用例片段 (用于策略实测)
+            {/* TAB 1: 策略参数 (CONFIG) */}
+            {activeTab === "config" && (
+              <div className="space-y-4">
+                {/* 1. 基础属性 (General Info) */}
+                <Card
+                  shadow="none"
+                  className="border border-slate-200/80 dark:border-slate-800/80 bg-slate-50/60 dark:bg-slate-900/40 rounded-2xl"
+                >
+                  <CardHeader className="px-3.5 pt-3 pb-1 flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                      <Layers className="h-3.5 w-3.5 text-blue-500" />
+                      节点基础定义
                     </span>
-                    <span className="text-[9px] text-slate-500 font-normal">点击展开/折叠</span>
-                  </summary>
-                  <div className="mt-2 space-y-1.5">
-                    <textarea
-                      rows={5}
-                      value={
-                        (localData.config as CodeInputConfig)?.sampleCode || ""
-                      }
-                      onChange={(e) =>
-                        handleConfigChange("sampleCode", e.target.value)
-                      }
-                      placeholder="输入待测试的代码片段，用于在平台中验证门禁策略实测效果..."
-                      className="w-full px-2.5 py-1 text-xs bg-[#080c14] border border-slate-800 rounded-md text-slate-300 font-mono focus:outline-none focus:border-amber-500 resize-none leading-normal"
-                    />
-                  </div>
-                </details>
-              </div>
-            )}
-
-            {selectedNode.type === "llm_review" && (
-              <div className="pt-2.5 border-t border-slate-800/80 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-semibold text-purple-400 uppercase tracking-wider flex items-center gap-1">
-                    <Sparkles className="h-3 w-3" />
-                    代码安全与漏洞审查策略
-                  </span>
-                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/10 border border-purple-500/20 text-purple-300 font-mono">
-                    Security & Rules
-                  </span>
-                </div>
-
-                <div>
-                  <label className="text-[10px] font-medium text-slate-400 mb-0.5 block flex items-center justify-between">
-                    <span>驱动推演模型</span>
-                    <Cpu className="h-3 w-3 text-slate-500" />
-                  </label>
-                  <select
-                    value={(localData.config as LLMReviewConfig)?.model || "AI/deekseek-v4-flash-0731"}
-                    onChange={(e) =>
-                      handleConfigChange("model", e.target.value)
-                    }
-                    className="w-full px-2 py-1 text-xs bg-slate-900 border border-slate-800 rounded-md text-slate-200 focus:outline-none focus:border-purple-500"
-                  >
-                    <option value="AI/deekseek-v4-flash-0731">DeepSeek-V4 Flash (推荐: 毫秒级推演)</option>
-                    <option value="deepseek-v3">DeepSeek-V3 (企业标准平衡版)</option>
-                    <option value="qwen-2.5-coder">Qwen 2.5 Coder 32B</option>
-                    <option value="deepseek-r1">DeepSeek-R1 (深度思维推理)</option>
-                  </select>
-                </div>
-
-                {/* Severity Level Selection */}
-                <div>
-                  <label className="text-[10px] font-medium text-slate-400 mb-1 block">
-                    门禁严格等级 (Severity Level)
-                  </label>
-                  <div className="grid grid-cols-3 gap-1.5">
-                    {[
-                      { id: "strict", label: "极严阻断", desc: "高危中危全阻断" },
-                      { id: "standard", label: "企业标准", desc: "阻断致命缺陷" },
-                      { id: "relaxed", label: "宽松告警", desc: "仅终端告警" },
-                    ].map((lvl) => {
-                      const cur = (localData.config as LLMReviewConfig)?.severityLevel || "strict";
-                      const isSel = cur === lvl.id;
-                      return (
-                        <button
-                          key={lvl.id}
-                          type="button"
-                          onClick={() => handleConfigChange("severityLevel", lvl.id)}
-                          className={cn(
-                            "px-2 py-1.5 rounded-lg border text-center transition-all",
-                            isSel
-                              ? "bg-purple-600/20 border-purple-500/50 text-purple-200 font-semibold"
-                              : "bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-300"
-                          )}
-                        >
-                          <div className="text-[11px]">{lvl.label}</div>
-                          <div className="text-[9px] text-slate-500 mt-0.5">{lvl.desc}</div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Enterprise Security Hard Rules */}
-                <div className="space-y-1.5 pt-1">
-                  <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block">
-                    专项防御红线 (Enterprise Hard Rules)
-                  </span>
-
-                  {/* Rule 1: Null Deref */}
-                  <label className="flex items-center justify-between p-2 rounded-lg bg-slate-900 border border-slate-800/80 cursor-pointer hover:border-slate-700 transition-colors">
-                    <div className="min-w-0 pr-2">
-                      <div className="text-[11px] font-medium text-slate-200 flex items-center gap-1.5">
-                        <ShieldAlert className="h-3 w-3 text-rose-400 shrink-0" />
-                        <span>阻断未定义解构与空指针风险</span>
-                      </div>
-                      <div className="text-[10px] text-slate-500 mt-0.5">
-                        如 user.wallet.balance 崩溃隐患
-                      </div>
+                  </CardHeader>
+                  <CardBody className="p-3.5 pt-1 space-y-3">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block">
+                        节点标识名称 (Label)
+                      </label>
+                      <Input
+                        size="sm"
+                        variant="bordered"
+                        aria-label="节点标识名称"
+                        placeholder="输入算子展示名称..."
+                        value={activeData.label || ""}
+                        onValueChange={(val) => handleFieldChange("label", val)}
+                        classNames={{
+                          inputWrapper:
+                            "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/80 hover:border-slate-400 dark:hover:border-slate-600 shadow-xs rounded-xl h-10 min-h-10",
+                          input: "text-xs text-slate-800 dark:text-slate-200 font-medium",
+                        }}
+                      />
                     </div>
-                    <input
-                      type="checkbox"
-                      checked={(localData.config as LLMReviewConfig)?.blockNullDeref ?? true}
-                      onChange={(e) => handleConfigChange("blockNullDeref", e.target.checked)}
-                      className="h-3.5 w-3.5 rounded border-slate-700 bg-slate-800 text-purple-500"
-                    />
-                  </label>
 
-                  {/* Rule 2: SQL Injection */}
-                  <label className="flex items-center justify-between p-2 rounded-lg bg-slate-900 border border-slate-800/80 cursor-pointer hover:border-slate-700 transition-colors">
-                    <div className="min-w-0 pr-2">
-                      <div className="text-[11px] font-medium text-slate-200 flex items-center gap-1.5">
-                        <ShieldAlert className="h-3 w-3 text-rose-400 shrink-0" />
-                        <span>阻断 SQL / 命令拼接与注入漏洞</span>
-                      </div>
-                      <div className="text-[10px] text-slate-500 mt-0.5">
-                        强制参数化查询，杜绝动态字符串拼接
-                      </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block">
+                        职责功能说明 (Description)
+                      </label>
+                      <Textarea
+                        size="sm"
+                        variant="bordered"
+                        aria-label="职责功能说明"
+                        placeholder="说明该算子在 CI 流程中的防御目标与检查范围..."
+                        minRows={2}
+                        maxRows={3}
+                        value={activeData.description || ""}
+                        onValueChange={(val) => handleFieldChange("description", val)}
+                        classNames={{
+                          inputWrapper:
+                            "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/80 hover:border-slate-400 dark:hover:border-slate-600 shadow-xs rounded-xl",
+                          input: "text-xs text-slate-800 dark:text-slate-200 leading-relaxed",
+                        }}
+                      />
                     </div>
-                    <input
-                      type="checkbox"
-                      checked={(localData.config as LLMReviewConfig)?.blockSqlInjection ?? true}
-                      onChange={(e) => handleConfigChange("blockSqlInjection", e.target.checked)}
-                      className="h-3.5 w-3.5 rounded border-slate-700 bg-slate-800 text-purple-500"
-                    />
-                  </label>
+                  </CardBody>
+                </Card>
 
-                  {/* Rule 3: Hardcoded Secrets */}
-                  <label className="flex items-center justify-between p-2 rounded-lg bg-slate-900 border border-slate-800/80 cursor-pointer hover:border-slate-700 transition-colors">
-                    <div className="min-w-0 pr-2">
-                      <div className="text-[11px] font-medium text-slate-200 flex items-center gap-1.5">
-                        <Lock className="h-3 w-3 text-amber-400 shrink-0" />
-                        <span>阻断明文秘钥 / Token 硬编码泄露</span>
-                      </div>
-                      <div className="text-[10px] text-slate-500 mt-0.5">
-                        严禁在源码中写入 API Key、私钥或密码
-                      </div>
+                {/* 2. 节点特异配置 - CODE_INPUT */}
+                {selectedNode.type === "code_input" && (
+                  <div className="space-y-3.5">
+                    <div className="flex items-center justify-between px-0.5">
+                      <span className="text-[11px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <FileCode2 className="h-3.5 w-3.5" />
+                        触发范围与白名单过滤
+                      </span>
                     </div>
-                    <input
-                      type="checkbox"
-                      checked={(localData.config as LLMReviewConfig)?.blockHardcodedSecrets ?? true}
-                      onChange={(e) => handleConfigChange("blockHardcodedSecrets", e.target.checked)}
-                      className="h-3.5 w-3.5 rounded border-slate-700 bg-slate-800 text-purple-500"
-                    />
-                  </label>
 
-                  {/* Rule 4: Dangerous Eval */}
-                  <label className="flex items-center justify-between p-2 rounded-lg bg-slate-900 border border-slate-800/80 cursor-pointer hover:border-slate-700 transition-colors">
-                    <div className="min-w-0 pr-2">
-                      <div className="text-[11px] font-medium text-slate-200 flex items-center gap-1.5">
-                        <AlertTriangle className="h-3 w-3 text-amber-400 shrink-0" />
-                        <span>阻断危险 eval / Function 动态执行</span>
-                      </div>
-                      <div className="text-[10px] text-slate-500 mt-0.5">
-                        防止任意代码执行逃逸
-                      </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block">
+                        门禁触发时机 (Git Hook Event)
+                      </label>
+                      <Select
+                        size="sm"
+                        variant="bordered"
+                        aria-label="门禁触发时机"
+                        selectedKeys={new Set([(activeData.config as CodeInputConfig)?.triggerEvent || "pre-commit"])}
+                        onSelectionChange={(keys) => {
+                          const val = Array.from(keys)[0] as string;
+                          if (val) handleConfigChange("triggerEvent", val);
+                        }}
+                        classNames={{
+                          trigger:
+                            "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/80 hover:border-slate-400 dark:hover:border-slate-600 shadow-xs rounded-xl h-10 min-h-10",
+                          value: "text-xs text-slate-800 dark:text-slate-200 font-medium",
+                        }}
+                      >
+                        <SelectItem key="pre-commit">pre-commit (本地提交前拦截 · 毫秒级阻断)</SelectItem>
+                        <SelectItem key="pre-push">pre-push (推送到远程分支前全量扫描)</SelectItem>
+                        <SelectItem key="pull-request">pull-request (CI/CD PR 合入前门禁卡点)</SelectItem>
+                      </Select>
                     </div>
-                    <input
-                      type="checkbox"
-                      checked={(localData.config as LLMReviewConfig)?.blockDangerousEval ?? true}
-                      onChange={(e) => handleConfigChange("blockDangerousEval", e.target.checked)}
-                      className="h-3.5 w-3.5 rounded border-slate-700 bg-slate-800 text-purple-500"
-                    />
-                  </label>
-                </div>
 
-                {/* Aspects */}
-                <div>
-                  <label className="text-[10px] font-medium text-slate-400 mb-1 block">
-                    重点关注维度 (多选)
-                  </label>
-                  <div className="grid grid-cols-2 gap-1">
-                    {REVIEW_ASPECT_OPTIONS.map((aspect) => {
-                      const currentAspects =
-                        (localData.config as LLMReviewConfig)?.reviewAspects || [];
-                      const isChecked = currentAspects.includes(aspect);
-                      return (
-                        <button
-                          key={aspect}
-                          type="button"
-                          onClick={() => toggleAspect(aspect)}
-                          className={cn(
-                            "px-1.5 py-1 rounded text-[10px] border text-left flex items-center gap-1 transition-colors",
-                            isChecked
-                              ? "bg-purple-500/15 border-purple-500/40 text-purple-300"
-                              : "bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-300"
-                          )}
-                        >
-                          <span
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block">
+                        代码分析主要语言
+                      </label>
+                      <Select
+                        size="sm"
+                        variant="bordered"
+                        aria-label="代码分析主要语言"
+                        selectedKeys={new Set([(activeData.config as CodeInputConfig)?.language || "typescript"])}
+                        onSelectionChange={(keys) => {
+                          const val = Array.from(keys)[0] as string;
+                          if (val) handleConfigChange("language", val);
+                        }}
+                        classNames={{
+                          trigger:
+                            "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/80 hover:border-slate-400 dark:hover:border-slate-600 shadow-xs rounded-xl h-10 min-h-10",
+                          value: "text-xs text-slate-800 dark:text-slate-200 font-medium",
+                        }}
+                      >
+                        <SelectItem key="typescript">TypeScript (.ts/.tsx)</SelectItem>
+                        <SelectItem key="javascript">JavaScript (.js/.jsx)</SelectItem>
+                        <SelectItem key="python">Python (.py)</SelectItem>
+                        <SelectItem key="go">Go (.go)</SelectItem>
+                        <SelectItem key="java">Java (.java)</SelectItem>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                          拦截文件匹配模式 (Glob 表达式)
+                        </label>
+                        <span className="text-[10px] text-slate-400">仅匹配文件触发</span>
+                      </div>
+                      <Input
+                        size="sm"
+                        variant="bordered"
+                        aria-label="拦截文件匹配模式"
+                        value={
+                          Array.isArray((activeData.config as CodeInputConfig)?.filePatterns)
+                            ? (activeData.config as CodeInputConfig).filePatterns!.join(", ")
+                            : "**/*.ts, **/*.tsx, **/*.js, **/*.jsx, **/*.py"
+                        }
+                        onValueChange={(val) =>
+                          handleConfigChange(
+                            "filePatterns",
+                            val.split(",").map((s) => s.trim()).filter(Boolean)
+                          )
+                        }
+                        classNames={{
+                          inputWrapper:
+                            "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/80 hover:border-slate-400 dark:hover:border-slate-600 shadow-xs rounded-xl font-mono h-10 min-h-10",
+                          input: "text-xs text-slate-800 dark:text-slate-200",
+                        }}
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block">
+                        排除与忽略目录 (Ignored Dirs)
+                      </label>
+                      <Input
+                        size="sm"
+                        variant="bordered"
+                        aria-label="排除与忽略目录"
+                        value={
+                          Array.isArray((activeData.config as CodeInputConfig)?.ignoredDirs)
+                            ? (activeData.config as CodeInputConfig).ignoredDirs!.join(", ")
+                            : "node_modules, dist, .next, build, coverage"
+                        }
+                        onValueChange={(val) =>
+                          handleConfigChange(
+                            "ignoredDirs",
+                            val.split(",").map((s) => s.trim()).filter(Boolean)
+                          )
+                        }
+                        classNames={{
+                          inputWrapper:
+                            "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/80 hover:border-slate-400 dark:hover:border-slate-600 shadow-xs rounded-xl font-mono h-10 min-h-10",
+                          input: "text-xs text-slate-800 dark:text-slate-200",
+                        }}
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block">
+                        单文件扫描大小限制 (KB)
+                      </label>
+                      <Input
+                        size="sm"
+                        variant="bordered"
+                        type="number"
+                        aria-label="单文件扫描大小限制"
+                        endContent={<span className="text-xs text-slate-400 font-mono">KB</span>}
+                        min={50}
+                        max={5000}
+                        step={50}
+                        value={String((activeData.config as CodeInputConfig)?.maxFileSizeKb ?? 500)}
+                        onValueChange={(val) =>
+                          handleConfigChange("maxFileSizeKb", parseInt(val, 10) || 500)
+                        }
+                        classNames={{
+                          inputWrapper:
+                            "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/80 hover:border-slate-400 dark:hover:border-slate-600 shadow-xs rounded-xl font-mono h-10 min-h-10",
+                          input: "text-xs text-slate-800 dark:text-slate-200",
+                        }}
+                      />
+                    </div>
+
+                    {/* Collapsible Sandbox Mock Code */}
+                    <Card
+                      shadow="none"
+                      className="border border-slate-200/80 dark:border-slate-800/80 bg-slate-50/60 dark:bg-slate-900/40 rounded-2xl overflow-hidden"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setIsSandboxOpen((v) => !v)}
+                        className="w-full px-3.5 py-2.5 flex items-center justify-between text-left hover:bg-slate-100/60 dark:hover:bg-slate-800/40 transition-colors"
+                      >
+                        <span className="text-xs font-semibold text-amber-700 dark:text-amber-300 flex items-center gap-1.5">
+                          <ChevronDown
                             className={cn(
-                              "h-1.5 w-1.5 rounded-full",
-                              isChecked ? "bg-purple-400" : "bg-slate-600"
+                              "h-3.5 w-3.5 text-slate-400 transition-transform duration-200",
+                              isSandboxOpen && "rotate-180"
                             )}
                           />
-                          <span className="truncate">{aspect}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Advanced Prompt Template in Details */}
-                <details className="border border-slate-800 rounded-lg p-2 bg-slate-900/40 group">
-                  <summary className="text-[11px] text-purple-300 font-medium cursor-pointer select-none list-none flex items-center justify-between">
-                    <span className="flex items-center gap-1.5">
-                      <ChevronDown className="h-3 w-3 group-open:rotate-180 transition-transform text-slate-400" />
-                      高级 Prompt 与推演温度微调
-                    </span>
-                    <span className="text-[9px] text-slate-500 font-normal">点击展开</span>
-                  </summary>
-                  <div className="mt-2 space-y-2">
-                    <div>
-                      <div className="flex items-center justify-between text-[10px] text-slate-400 mb-0.5">
-                        <span>Temperature</span>
-                        <span className="font-mono text-purple-300 font-semibold">
-                          {((localData.config as LLMReviewConfig)?.temperature ?? 0.1).toFixed(2)}
+                          仿真测试用例片段 (用于策略实测)
                         </span>
-                      </div>
-                      <input
-                        type="range"
-                        min="0"
-                        max="1"
-                        step="0.05"
-                        value={(localData.config as LLMReviewConfig)?.temperature ?? 0.1}
-                        onChange={(e) =>
-                          handleConfigChange("temperature", parseFloat(e.target.value))
-                        }
-                        className="w-full accent-purple-500 cursor-pointer h-1.5"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-medium text-slate-400 mb-0.5 block">
-                        自定义审查 Prompt 模板
-                      </label>
-                      <textarea
-                        rows={3}
-                        value={
-                          (localData.config as LLMReviewConfig)?.promptTemplate || ""
-                        }
-                        onChange={(e) =>
-                          handleConfigChange("promptTemplate", e.target.value)
-                        }
-                        className="w-full px-2 py-1 text-xs bg-slate-900 border border-slate-800 rounded-md text-slate-300 font-mono focus:outline-none focus:border-purple-500 resize-none leading-normal"
-                      />
-                    </div>
-                  </div>
-                </details>
-              </div>
-            )}
-
-            {selectedNode.type === "test_generator" && (
-              <div className="pt-2.5 border-t border-slate-800/80 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-semibold text-emerald-400 uppercase tracking-wider flex items-center gap-1">
-                    <TestTube2 className="h-3 w-3" />
-                    单元测试红线与覆盖率卡点
-                  </span>
-                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 font-mono">
-                    Tests & Coverage
-                  </span>
-                </div>
-
-                {/* Enforce Tests Switch */}
-                <label className="flex items-center justify-between p-2 rounded-lg bg-slate-900 border border-slate-800/80 cursor-pointer hover:border-slate-700 transition-colors">
-                  <div className="min-w-0 pr-2">
-                    <div className="text-[11px] font-medium text-slate-200 flex items-center gap-1.5">
-                      <ShieldCheck className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
-                      <span>强制单测覆盖卡点 (Enforce Tests)</span>
-                    </div>
-                    <div className="text-[10px] text-slate-500 mt-0.5">
-                      若核心业务代码改动但未编写通过单测，直接触发门禁拦截
-                    </div>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={(localData.config as TestGeneratorConfig)?.enforceTests ?? true}
-                    onChange={(e) => handleConfigChange("enforceTests", e.target.checked)}
-                    className="h-3.5 w-3.5 rounded border-slate-700 bg-slate-800 text-emerald-500"
-                  />
-                </label>
-
-                <div>
-                  <label className="text-[10px] font-medium text-slate-400 mb-0.5 block">
-                    测试运行框架
-                  </label>
-                  <select
-                    value={
-                      (localData.config as TestGeneratorConfig)?.framework || "jest"
-                    }
-                    onChange={(e) =>
-                      handleConfigChange("framework", e.target.value)
-                    }
-                    className="w-full px-2 py-1 text-xs bg-slate-900 border border-slate-800 rounded-md text-slate-200 focus:outline-none focus:border-emerald-500 font-mono"
-                  >
-                    <option value="jest">Jest (TS/JS 常用)</option>
-                    <option value="vitest">Vitest (Next/Vite 高速测试)</option>
-                    <option value="pytest">PyTest (Python)</option>
-                    <option value="unittest">Unittest (Python 标准库)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between text-[10px] text-slate-400 mb-0.5">
-                    <span>目标行覆盖率门槛</span>
-                    <span className="font-mono text-emerald-300 font-semibold">
-                      {(localData.config as TestGeneratorConfig)?.targetCoverage ?? 80}%
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min="50"
-                    max="100"
-                    step="5"
-                    value={
-                      (localData.config as TestGeneratorConfig)?.targetCoverage ?? 80
-                    }
-                    onChange={(e) =>
-                      handleConfigChange(
-                        "targetCoverage",
-                        parseInt(e.target.value, 10)
-                      )
-                    }
-                    className="w-full accent-emerald-500 cursor-pointer h-1.5"
-                  />
-                  <div className="flex justify-between text-[9px] text-slate-500 mt-0.5 font-mono">
-                    <span>50% (基础)</span>
-                    <span>80% (标准推荐)</span>
-                    <span>100% (航天级)</span>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="text-[10px] font-medium text-slate-400 mb-0.5 block">
-                    沙箱运行超时限制 (秒)
-                  </label>
-                  <input
-                    type="number"
-                    min={5}
-                    max={120}
-                    value={(localData.config as TestGeneratorConfig)?.sandboxTimeoutSec ?? 30}
-                    onChange={(e) =>
-                      handleConfigChange(
-                        "sandboxTimeoutSec",
-                        parseInt(e.target.value, 10) || 30
-                      )
-                    }
-                    className="w-full px-2.5 py-1 text-xs bg-slate-900 border border-slate-800 rounded-md text-slate-200 font-mono focus:outline-none focus:border-emerald-500"
-                  />
-                </div>
-
-                <div className="flex items-center justify-between p-2 rounded-md bg-slate-900 border border-slate-800">
-                  <div className="text-[11px]">
-                    <span className="text-slate-300 font-medium block">
-                      自动隔离并 Mock 外部依赖
-                    </span>
-                    <span className="text-[10px] text-slate-500">
-                      自动为外部 HTTP 与 DB 注入 Stub，保证测试纯粹性
-                    </span>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={
-                      (localData.config as TestGeneratorConfig)?.mockMode ?? true
-                    }
-                    onChange={(e) =>
-                      handleConfigChange("mockMode", e.target.checked)
-                    }
-                    className="h-3.5 w-3.5 rounded border-slate-700 bg-slate-800 text-emerald-500"
-                  />
-                </div>
-              </div>
-            )}
-
-            {selectedNode.type === "diff_export" && (
-              <div className="pt-2.5 border-t border-slate-800/80 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-semibold text-cyan-400 uppercase tracking-wider flex items-center gap-1">
-                    <GitCompare className="h-3 w-3" />
-                    门禁决策与产物输出
-                  </span>
-                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-cyan-500/10 border border-cyan-500/20 text-cyan-300 font-mono">
-                    Enforce & Output
-                  </span>
-                </div>
-
-                {/* Gatekeeper Failure Action */}
-                <div>
-                  <label className="text-[10px] font-medium text-slate-400 mb-1 block">
-                    检测到违规时的门禁决策 (Failure Action)
-                  </label>
-                  <div className="space-y-1.5">
-                    {[
-                      {
-                        id: "block_commit",
-                        label: "🚨 强行拦截并阻断 (Exit 1)",
-                        desc: "开发者终端提交失败，必须修复所有红线缺陷",
-                      },
-                      {
-                        id: "warn_only",
-                        label: "⚠️ 弱告警放行 (Warning)",
-                        desc: "终端打印警告与修复建议，允许提交并记录审计日志",
-                      },
-                      {
-                        id: "create_review_pr",
-                        label: "🔄 自动打回并生成评审补丁",
-                        desc: "生成修复 Patch 并自动推送到审查流水线",
-                      },
-                    ].map((act) => {
-                      const cur = (localData.config as DiffExportConfig)?.failureAction || "block_commit";
-                      const isSel = cur === act.id;
-                      return (
-                        <label
-                          key={act.id}
-                          className={cn(
-                            "flex items-start gap-2 p-2 rounded-lg border cursor-pointer transition-all",
-                            isSel
-                              ? "bg-cyan-950/30 border-cyan-500/50 text-cyan-200"
-                              : "bg-slate-900/60 border-slate-800 text-slate-400 hover:border-slate-700"
-                          )}
-                        >
-                          <input
-                            type="radio"
-                            name="failureAction"
-                            value={act.id}
-                            checked={isSel}
-                            onChange={() => handleConfigChange("failureAction", act.id)}
-                            className="mt-0.5 text-cyan-500 bg-slate-800 border-slate-700"
+                        <span className="text-[10px] text-slate-400">
+                          {isSandboxOpen ? "收起" : "展开编辑"}
+                        </span>
+                      </button>
+                      {isSandboxOpen && (
+                        <div className="p-3 pt-0 border-t border-slate-200/60 dark:border-slate-800/60 mt-1">
+                          <Textarea
+                            size="sm"
+                            variant="bordered"
+                            aria-label="仿真测试用例代码片段"
+                            placeholder="输入待测试的代码片段，用于在平台中验证门禁策略实测效果..."
+                            minRows={4}
+                            value={(activeData.config as CodeInputConfig)?.sampleCode || ""}
+                            onValueChange={(val) => handleConfigChange("sampleCode", val)}
+                            classNames={{
+                              inputWrapper:
+                                "border-slate-200 dark:border-slate-800 bg-white dark:bg-[#080c14] font-mono text-xs rounded-xl mt-2",
+                            }}
                           />
-                          <div className="min-w-0">
-                            <div className="text-[11px] font-semibold text-slate-200">
-                              {act.label}
+                        </div>
+                      )}
+                    </Card>
+                  </div>
+                )}
+
+                {/* 2. 节点特异配置 - LLM_REVIEW */}
+                {selectedNode.type === "llm_review" && (
+                  <div className="space-y-3.5">
+                    <div className="flex items-center justify-between px-0.5">
+                      <span className="text-[11px] font-bold text-purple-600 dark:text-purple-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <Sparkles className="h-3.5 w-3.5" />
+                        代码安全与漏洞审查策略
+                      </span>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block">
+                        驱动推演审查大模型
+                      </label>
+                      <Select
+                        size="sm"
+                        variant="bordered"
+                        aria-label="驱动推演审查大模型"
+                        selectedKeys={new Set([(activeData.config as LLMReviewConfig)?.model || "AI/deekseek-v4-flash-0731"])}
+                        onSelectionChange={(keys) => {
+                          const val = Array.from(keys)[0] as string;
+                          if (val) handleConfigChange("model", val);
+                        }}
+                        classNames={{
+                          trigger:
+                            "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/80 hover:border-slate-400 dark:hover:border-slate-600 shadow-xs rounded-xl h-10 min-h-10",
+                          value: "text-xs text-slate-800 dark:text-slate-200 font-medium",
+                        }}
+                      >
+                        <SelectItem key="AI/deekseek-v4-flash-0731">DeepSeek-V4 Flash (推荐 · 毫秒级推演)</SelectItem>
+                        <SelectItem key="deepseek-v3">DeepSeek-V3 (企业标准平衡版)</SelectItem>
+                        <SelectItem key="qwen-2.5-coder">Qwen 2.5 Coder 32B</SelectItem>
+                        <SelectItem key="deepseek-r1">DeepSeek-R1 (深度思维推理模式)</SelectItem>
+                      </Select>
+                    </div>
+
+                    {/* Segmented Pill Selector for Severity Level */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                          门禁严格等级 (Severity Level)
+                        </label>
+                        <Chip
+                          size="sm"
+                          variant="flat"
+                          color={
+                            (activeData.config as LLMReviewConfig)?.severityLevel === "strict"
+                              ? "danger"
+                              : (activeData.config as LLMReviewConfig)?.severityLevel === "standard"
+                              ? "secondary"
+                              : "warning"
+                          }
+                          className="h-5 text-[10px] font-mono px-1.5"
+                        >
+                          {(activeData.config as LLMReviewConfig)?.severityLevel || "strict"}
+                        </Chip>
+                      </div>
+                      <Tabs
+                        size="sm"
+                        fullWidth
+                        color={
+                          (activeData.config as LLMReviewConfig)?.severityLevel === "strict"
+                            ? "danger"
+                            : (activeData.config as LLMReviewConfig)?.severityLevel === "standard"
+                            ? "secondary"
+                            : "warning"
+                        }
+                        selectedKey={(activeData.config as LLMReviewConfig)?.severityLevel || "strict"}
+                        onSelectionChange={(k) => handleConfigChange("severityLevel", k as string)}
+                        classNames={{
+                          tabList:
+                            "bg-slate-100 dark:bg-slate-900/90 p-1 rounded-xl border border-slate-200/80 dark:border-slate-800/80",
+                          cursor: "rounded-lg shadow-sm",
+                          tab: "h-7 text-xs font-medium",
+                        }}
+                      >
+                        <Tab key="strict" title="🚨 极严阻断" />
+                        <Tab key="standard" title="🛡️ 企业标准" />
+                        <Tab key="relaxed" title="⚠️ 宽松告警" />
+                      </Tabs>
+                    </div>
+
+                    {/* Enterprise Hard Rules Cards with HeroUI Switches */}
+                    <div className="space-y-2">
+                      <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block">
+                        专项防御红线 (Enterprise Hard Rules)
+                      </label>
+
+                      {/* Rule 1 */}
+                      <Card
+                        shadow="none"
+                        className="border border-slate-200/80 dark:border-slate-800/80 bg-white/80 dark:bg-slate-900/60 rounded-xl"
+                      >
+                        <CardBody className="p-2.5 flex flex-row items-center justify-between gap-2">
+                          <div className="min-w-0 pr-2">
+                            <div className="text-xs font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                              <ShieldAlert className="h-3.5 w-3.5 text-rose-500 shrink-0" />
+                              <span>阻断未定义解构与空指针风险</span>
                             </div>
-                            <div className="text-[10px] text-slate-500 leading-tight mt-0.5">
-                              {act.desc}
+                            <div className="text-[10px] text-slate-500 mt-0.5">
+                              如 user.wallet.balance 崩溃隐患
                             </div>
                           </div>
+                          <Switch
+                            size="sm"
+                            color="danger"
+                            isSelected={(activeData.config as LLMReviewConfig)?.blockNullDeref ?? true}
+                            onValueChange={(val) => handleConfigChange("blockNullDeref", val)}
+                            aria-label="阻断未定义解构与空指针风险"
+                          />
+                        </CardBody>
+                      </Card>
+
+                      {/* Rule 2 */}
+                      <Card
+                        shadow="none"
+                        className="border border-slate-200/80 dark:border-slate-800/80 bg-white/80 dark:bg-slate-900/60 rounded-xl"
+                      >
+                        <CardBody className="p-2.5 flex flex-row items-center justify-between gap-2">
+                          <div className="min-w-0 pr-2">
+                            <div className="text-xs font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                              <ShieldAlert className="h-3.5 w-3.5 text-rose-500 shrink-0" />
+                              <span>阻断 SQL / 命令拼接与注入漏洞</span>
+                            </div>
+                            <div className="text-[10px] text-slate-500 mt-0.5">
+                              强制参数化查询，杜绝动态拼接
+                            </div>
+                          </div>
+                          <Switch
+                            size="sm"
+                            color="danger"
+                            isSelected={(activeData.config as LLMReviewConfig)?.blockSqlInjection ?? true}
+                            onValueChange={(val) => handleConfigChange("blockSqlInjection", val)}
+                            aria-label="阻断 SQL 注入"
+                          />
+                        </CardBody>
+                      </Card>
+
+                      {/* Rule 3 */}
+                      <Card
+                        shadow="none"
+                        className="border border-slate-200/80 dark:border-slate-800/80 bg-white/80 dark:bg-slate-900/60 rounded-xl"
+                      >
+                        <CardBody className="p-2.5 flex flex-row items-center justify-between gap-2">
+                          <div className="min-w-0 pr-2">
+                            <div className="text-xs font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                              <Lock className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                              <span>阻断明文秘钥 / Token 硬编码泄露</span>
+                            </div>
+                            <div className="text-[10px] text-slate-500 mt-0.5">
+                              严禁写入 API Key、私钥或密码
+                            </div>
+                          </div>
+                          <Switch
+                            size="sm"
+                            color="warning"
+                            isSelected={(activeData.config as LLMReviewConfig)?.blockHardcodedSecrets ?? true}
+                            onValueChange={(val) => handleConfigChange("blockHardcodedSecrets", val)}
+                            aria-label="阻断明文秘钥泄露"
+                          />
+                        </CardBody>
+                      </Card>
+
+                      {/* Rule 4 */}
+                      <Card
+                        shadow="none"
+                        className="border border-slate-200/80 dark:border-slate-800/80 bg-white/80 dark:bg-slate-900/60 rounded-xl"
+                      >
+                        <CardBody className="p-2.5 flex flex-row items-center justify-between gap-2">
+                          <div className="min-w-0 pr-2">
+                            <div className="text-xs font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                              <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                              <span>阻断危险 eval / Function 动态执行</span>
+                            </div>
+                            <div className="text-[10px] text-slate-500 mt-0.5">
+                              防止任意代码执行逃逸
+                            </div>
+                          </div>
+                          <Switch
+                            size="sm"
+                            color="warning"
+                            isSelected={(activeData.config as LLMReviewConfig)?.blockDangerousEval ?? true}
+                            onValueChange={(val) => handleConfigChange("blockDangerousEval", val)}
+                            aria-label="阻断危险 eval 执行"
+                          />
+                        </CardBody>
+                      </Card>
+                    </div>
+
+                    {/* Temperature Slider */}
+                    <Card
+                      shadow="none"
+                      className="border border-slate-200/80 dark:border-slate-800/80 bg-white/80 dark:bg-slate-900/60 rounded-xl p-3 space-y-2"
+                    >
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                          <Cpu className="h-3.5 w-3.5 text-purple-500" />
+                          推演随机度 (Temperature)
                         </label>
-                      );
-                    })}
+                        <Chip size="sm" variant="flat" color="secondary" className="h-5 text-xs font-mono font-bold px-1.5">
+                          {((activeData.config as LLMReviewConfig)?.temperature ?? 0.1).toFixed(2)}
+                        </Chip>
+                      </div>
+                      <Slider
+                        size="sm"
+                        color="secondary"
+                        aria-label="Temperature"
+                        step={0.05}
+                        maxValue={1}
+                        minValue={0}
+                        value={(activeData.config as LLMReviewConfig)?.temperature ?? 0.1}
+                        onChange={(val) =>
+                          handleConfigChange("temperature", Array.isArray(val) ? val[0] : val)
+                        }
+                        className="max-w-full"
+                      />
+                      <div className="flex justify-between text-[10px] text-slate-400 font-mono">
+                        <span>0.0 (严谨确定性)</span>
+                        <span>1.0 (高发散性)</span>
+                      </div>
+                    </Card>
+
+                    {/* Review Aspects using HeroUI Chips */}
+                    <div>
+                      <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5 block">
+                        重点审查维度关注 (点击切换)
+                      </label>
+                      <div className="flex flex-wrap gap-1.5">
+                        {REVIEW_ASPECT_OPTIONS.map((aspect) => {
+                          const currentAspects =
+                            (activeData.config as LLMReviewConfig)?.reviewAspects || [];
+                          const isChecked = currentAspects.includes(aspect);
+                          return (
+                            <Chip
+                              key={aspect}
+                              size="sm"
+                              variant={isChecked ? "solid" : "bordered"}
+                              color={isChecked ? "secondary" : "default"}
+                              className={cn(
+                                "cursor-pointer transition-all select-none text-xs h-7 px-2",
+                                isChecked
+                                  ? "shadow-xs"
+                                  : "border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:border-purple-400"
+                              )}
+                              onClick={() => toggleAspect(aspect)}
+                            >
+                              {isChecked ? `✓ ${aspect}` : `+ ${aspect}`}
+                            </Chip>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Prompt Template Customization */}
+                    <Card
+                      shadow="none"
+                      className="border border-slate-200/80 dark:border-slate-800/80 bg-slate-50/60 dark:bg-slate-900/40 rounded-2xl overflow-hidden"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setIsSandboxOpen((v) => !v)}
+                        className="w-full px-3.5 py-2.5 flex items-center justify-between text-left hover:bg-slate-100/60 dark:hover:bg-slate-800/40 transition-colors"
+                      >
+                        <span className="text-xs font-semibold text-purple-700 dark:text-purple-300 flex items-center gap-1.5">
+                          <ChevronDown
+                            className={cn(
+                              "h-3.5 w-3.5 text-slate-400 transition-transform duration-200",
+                              isSandboxOpen && "rotate-180"
+                            )}
+                          />
+                          高级 Prompt 提示词模板定制
+                        </span>
+                        <span className="text-[10px] text-slate-400">
+                          {isSandboxOpen ? "收起" : "展开"}
+                        </span>
+                      </button>
+                      {isSandboxOpen && (
+                        <div className="p-3 pt-0 border-t border-slate-200/60 dark:border-slate-800/60 mt-1">
+                          <Textarea
+                            size="sm"
+                            variant="bordered"
+                            aria-label="高级 Prompt 提示词模板"
+                            minRows={3}
+                            value={(activeData.config as LLMReviewConfig)?.promptTemplate || ""}
+                            onValueChange={(val) => handleConfigChange("promptTemplate", val)}
+                            classNames={{
+                              inputWrapper:
+                                "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 font-mono text-xs rounded-xl mt-2",
+                            }}
+                          />
+                        </div>
+                      )}
+                    </Card>
                   </div>
-                </div>
+                )}
 
-                <div>
-                  <label className="text-[10px] font-medium text-slate-400 mb-0.5 block flex items-center gap-1">
-                    <BellRing className="h-3 w-3 text-cyan-400" />
-                    <span>即时消息通知联动 (DevOps Webhook)</span>
-                  </label>
-                  <select
-                    value={(localData.config as DiffExportConfig)?.notifyChannel || "none"}
-                    onChange={(e) =>
-                      handleConfigChange("notifyChannel", e.target.value)
-                    }
-                    className="w-full px-2 py-1 text-xs bg-slate-900 border border-slate-800 rounded-md text-slate-200 focus:outline-none focus:border-cyan-500"
-                  >
-                    <option value="none">无外部通知 (仅本地与平台审计)</option>
-                    <option value="feishu">飞书机器人 Webhook (企业大群推送)</option>
-                    <option value="dingtalk">钉钉群机器人 Webhook</option>
-                    <option value="slack">Slack DevOps #quality-alerts</option>
-                  </select>
-                </div>
+                {/* 2. 节点特异配置 - TEST_GENERATOR */}
+                {selectedNode.type === "test_generator" && (
+                  <div className="space-y-3.5">
+                    <div className="flex items-center justify-between px-0.5">
+                      <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <TestTube2 className="h-3.5 w-3.5" />
+                        自动化单测与覆盖率卡点
+                      </span>
+                    </div>
 
-                <div>
-                  <label className="text-[10px] font-medium text-slate-400 mb-0.5 block">
-                    差异产物导出格式
-                  </label>
-                  <select
-                    value={
-                      (localData.config as DiffExportConfig)?.exportFormat ||
-                      "unified_diff"
-                    }
-                    onChange={(e) =>
-                      handleConfigChange("exportFormat", e.target.value)
-                    }
-                    className="w-full px-2 py-1 text-xs bg-slate-900 border border-slate-800 rounded-md text-slate-200 focus:outline-none focus:border-cyan-500"
-                  >
-                    <option value="unified_diff">Unified Diff 标准补丁格式</option>
-                    <option value="git_patch">Git Patch (.patch 文件)</option>
-                    <option value="json_report">JSON 结构化审查审计报告</option>
-                  </select>
-                </div>
+                    {/* Enforce Tests Switch */}
+                    <Card
+                      shadow="none"
+                      className="border border-slate-200/80 dark:border-slate-800/80 bg-white/80 dark:bg-slate-900/60 rounded-xl"
+                    >
+                      <CardBody className="p-2.5 flex flex-row items-center justify-between gap-2">
+                        <div className="min-w-0 pr-2">
+                          <div className="text-xs font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                            <ShieldCheck className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                            <span>强制单测覆盖卡点 (Enforce Tests)</span>
+                          </div>
+                          <div className="text-[10px] text-slate-500 mt-0.5">
+                            改动未编写通过单测直接阻止提交
+                          </div>
+                        </div>
+                        <Switch
+                          size="sm"
+                          color="success"
+                          isSelected={(activeData.config as TestGeneratorConfig)?.enforceTests ?? true}
+                          onValueChange={(val) => handleConfigChange("enforceTests", val)}
+                          aria-label="强制单测卡点"
+                        />
+                      </CardBody>
+                    </Card>
 
-                <div>
-                  <label className="text-[10px] font-medium text-slate-400 mb-0.5 block">
-                    补丁文件落盘路径
-                  </label>
-                  <input
-                    type="text"
-                    value={
-                      (localData.config as DiffExportConfig)?.outputPath ||
-                      "./output/gatekeeper-patch.diff"
-                    }
-                    onChange={(e) =>
-                      handleConfigChange("outputPath", e.target.value)
-                    }
-                    className="w-full px-2 py-1 text-xs bg-slate-900 border border-slate-800 rounded-md text-slate-200 font-mono focus:outline-none focus:border-cyan-500"
-                  />
-                </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block">
+                        测试驱动框架
+                      </label>
+                      <Select
+                        size="sm"
+                        variant="bordered"
+                        aria-label="测试驱动框架"
+                        selectedKeys={new Set([(activeData.config as TestGeneratorConfig)?.framework || "jest"])}
+                        onSelectionChange={(keys) => {
+                          const val = Array.from(keys)[0] as string;
+                          if (val) handleConfigChange("framework", val);
+                        }}
+                        classNames={{
+                          trigger:
+                            "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/80 hover:border-slate-400 dark:hover:border-slate-600 shadow-xs rounded-xl h-10 min-h-10",
+                          value: "text-xs text-slate-800 dark:text-slate-200 font-medium",
+                        }}
+                      >
+                        <SelectItem key="jest">Jest (TS/JS 经典推荐)</SelectItem>
+                        <SelectItem key="vitest">Vitest (Next/Vite 高速测试)</SelectItem>
+                        <SelectItem key="pytest">PyTest (Python 现代测试)</SelectItem>
+                        <SelectItem key="unittest">Unittest (Python 标准库)</SelectItem>
+                      </Select>
+                    </div>
+
+                    {/* Target Coverage Slider */}
+                    <Card
+                      shadow="none"
+                      className="border border-slate-200/80 dark:border-slate-800/80 bg-white/80 dark:bg-slate-900/60 rounded-xl p-3 space-y-2"
+                    >
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                          目标行覆盖率红线 (%)
+                        </label>
+                        <Chip size="sm" variant="flat" color="success" className="h-5 text-xs font-mono font-bold px-1.5">
+                          {(activeData.config as TestGeneratorConfig)?.targetCoverage ?? 80}%
+                        </Chip>
+                      </div>
+                      <Slider
+                        size="sm"
+                        color="success"
+                        aria-label="目标行覆盖率"
+                        step={5}
+                        minValue={50}
+                        maxValue={100}
+                        value={(activeData.config as TestGeneratorConfig)?.targetCoverage ?? 80}
+                        onChange={(val) =>
+                          handleConfigChange("targetCoverage", Array.isArray(val) ? val[0] : val)
+                        }
+                        className="max-w-full"
+                      />
+                      <div className="flex justify-between text-[10px] text-slate-400 font-mono">
+                        <span>50% (底线)</span>
+                        <span>80% (标准)</span>
+                        <span>100% (极高)</span>
+                      </div>
+                    </Card>
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block">
+                        沙箱隔离运行超时限制 (秒)
+                      </label>
+                      <Input
+                        size="sm"
+                        variant="bordered"
+                        type="number"
+                        aria-label="沙箱隔离运行超时限制"
+                        endContent={<span className="text-xs text-slate-400 font-mono">秒</span>}
+                        min={5}
+                        max={120}
+                        value={String((activeData.config as TestGeneratorConfig)?.sandboxTimeoutSec ?? 30)}
+                        onValueChange={(val) =>
+                          handleConfigChange("sandboxTimeoutSec", parseInt(val, 10) || 30)
+                        }
+                        classNames={{
+                          inputWrapper:
+                            "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/80 hover:border-slate-400 dark:hover:border-slate-600 shadow-xs rounded-xl font-mono h-10 min-h-10",
+                          input: "text-xs text-slate-800 dark:text-slate-200",
+                        }}
+                      />
+                    </div>
+
+                    {/* Mock Mode Switch */}
+                    <Card
+                      shadow="none"
+                      className="border border-slate-200/80 dark:border-slate-800/80 bg-white/80 dark:bg-slate-900/60 rounded-xl"
+                    >
+                      <CardBody className="p-2.5 flex flex-row items-center justify-between gap-2">
+                        <div className="min-w-0 pr-2">
+                          <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                            自动隔离并 Mock 外部依赖
+                          </div>
+                          <div className="text-[10px] text-slate-500 mt-0.5">
+                            自动为 HTTP/DB 注入 Stub，保证单测纯粹
+                          </div>
+                        </div>
+                        <Switch
+                          size="sm"
+                          color="success"
+                          isSelected={(activeData.config as TestGeneratorConfig)?.mockMode ?? true}
+                          onValueChange={(val) => handleConfigChange("mockMode", val)}
+                          aria-label="自动隔离 Mock"
+                        />
+                      </CardBody>
+                    </Card>
+                  </div>
+                )}
+
+                {/* 2. 节点特异配置 - DIFF_EXPORT */}
+                {selectedNode.type === "diff_export" && (
+                  <div className="space-y-3.5">
+                    <div className="flex items-center justify-between px-0.5">
+                      <span className="text-[11px] font-bold text-cyan-600 dark:text-cyan-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <GitCompare className="h-3.5 w-3.5" />
+                        门禁决策与产物输出
+                      </span>
+                    </div>
+
+                    {/* Segmented Pill Selector for Failure Action */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                          门禁拦截决策 (Failure Action)
+                        </label>
+                      </div>
+                      <Tabs
+                        size="sm"
+                        fullWidth
+                        color={
+                          (activeData.config as DiffExportConfig)?.failureAction === "block_commit"
+                            ? "danger"
+                            : (activeData.config as DiffExportConfig)?.failureAction === "warn_only"
+                            ? "warning"
+                            : "primary"
+                        }
+                        selectedKey={(activeData.config as DiffExportConfig)?.failureAction || "block_commit"}
+                        onSelectionChange={(k) => handleConfigChange("failureAction", k as string)}
+                        classNames={{
+                          tabList:
+                            "bg-slate-100 dark:bg-slate-900/90 p-1 rounded-xl border border-slate-200/80 dark:border-slate-800/80",
+                          cursor: "rounded-lg shadow-sm",
+                          tab: "h-7 text-xs font-medium",
+                        }}
+                      >
+                        <Tab key="block_commit" title="🚨 强行阻断" />
+                        <Tab key="warn_only" title="⚠️ 弱告警" />
+                        <Tab key="create_review_pr" title="🔄 评审补丁" />
+                      </Tabs>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block">
+                        即时消息通知联动 (DevOps Webhook)
+                      </label>
+                      <Select
+                        size="sm"
+                        variant="bordered"
+                        aria-label="即时消息通知联动"
+                        selectedKeys={new Set([(activeData.config as DiffExportConfig)?.notifyChannel || "none"])}
+                        onSelectionChange={(keys) => {
+                          const val = Array.from(keys)[0] as string;
+                          if (val) handleConfigChange("notifyChannel", val);
+                        }}
+                        classNames={{
+                          trigger:
+                            "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/80 hover:border-slate-400 dark:hover:border-slate-600 shadow-xs rounded-xl h-10 min-h-10",
+                          value: "text-xs text-slate-800 dark:text-slate-200 font-medium",
+                        }}
+                      >
+                        <SelectItem key="none">无外部通知 (仅本地与平台审计)</SelectItem>
+                        <SelectItem key="feishu">飞书群机器人 Webhook</SelectItem>
+                        <SelectItem key="dingtalk">钉钉群机器人 Webhook</SelectItem>
+                        <SelectItem key="slack">Slack DevOps #quality-alerts</SelectItem>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block">
+                        差异补丁导出格式
+                      </label>
+                      <Select
+                        size="sm"
+                        variant="bordered"
+                        aria-label="差异补丁导出格式"
+                        selectedKeys={new Set([(activeData.config as DiffExportConfig)?.exportFormat || "unified_diff"])}
+                        onSelectionChange={(keys) => {
+                          const val = Array.from(keys)[0] as string;
+                          if (val) handleConfigChange("exportFormat", val);
+                        }}
+                        classNames={{
+                          trigger:
+                            "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/80 hover:border-slate-400 dark:hover:border-slate-600 shadow-xs rounded-xl h-10 min-h-10",
+                          value: "text-xs text-slate-800 dark:text-slate-200 font-medium",
+                        }}
+                      >
+                        <SelectItem key="unified_diff">Unified Diff 标准补丁格式</SelectItem>
+                        <SelectItem key="git_patch">Git Patch (.patch 文件)</SelectItem>
+                        <SelectItem key="json_report">JSON 结构化审计报告</SelectItem>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block">
+                        补丁文件落盘路径
+                      </label>
+                      <Input
+                        size="sm"
+                        variant="bordered"
+                        aria-label="补丁文件落盘路径"
+                        value={
+                          (activeData.config as DiffExportConfig)?.outputPath ||
+                          "./output/gatekeeper-patch.diff"
+                        }
+                        onValueChange={(val) => handleConfigChange("outputPath", val)}
+                        classNames={{
+                          inputWrapper:
+                            "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/80 hover:border-slate-400 dark:hover:border-slate-600 shadow-xs rounded-xl font-mono h-10 min-h-10",
+                          input: "text-xs text-slate-800 dark:text-slate-200",
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
-            {/* Live Streaming Logs Section */}
-            {selectedNode && (
-              <div className="pt-2.5 border-t border-slate-800/80 space-y-1.5">
+            {/* TAB 2: 推演日志 (LOGS) */}
+            {activeTab === "logs" && (
+              <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1">
-                    <Terminal className="h-3 w-3 text-blue-400" />
-                    实时日志 (Live Stream)
+                  <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                    <Terminal className="h-3.5 w-3.5 text-blue-500" />
+                    算子独立推演日志
                   </span>
-                  <span className="text-[10px] font-mono text-slate-500">
-                    {(nodeLogs[selectedNode.id] || []).length} 条
-                  </span>
+                  <Chip size="sm" variant="flat" color="default" className="h-5 text-[10px] font-mono">
+                    {currentLogs.length} 条记录
+                  </Chip>
                 </div>
 
-                <div className="bg-[#080c14] border border-slate-800/90 rounded-md p-2 max-h-36 overflow-y-auto font-mono text-[10px] space-y-1">
-                  {(nodeLogs[selectedNode.id] || []).length > 0 ? (
-                    (nodeLogs[selectedNode.id] || []).map((log, idx) => (
-                      <div key={idx} className="flex items-start gap-1 text-slate-300 leading-tight">
-                        <span className="text-blue-500 shrink-0 select-none">›</span>
+                <div className="bg-slate-950 dark:bg-[#070a12] border border-slate-800/90 rounded-2xl p-3.5 min-h-[260px] max-h-[380px] overflow-y-auto font-mono text-[11px] space-y-1.5 shadow-inner">
+                  {currentLogs.length > 0 ? (
+                    currentLogs.map((log, idx) => (
+                      <div
+                        key={idx}
+                        className="flex items-start gap-2 text-slate-200 dark:text-slate-300 leading-relaxed font-mono"
+                      >
+                        <span className="text-blue-400 shrink-0 select-none font-bold">›</span>
                         <span className="break-all">{log}</span>
                       </div>
                     ))
                   ) : (
-                    <div className="text-slate-600 italic py-1 text-center text-[10px]">
-                      等待触发执行...
+                    <div className="h-48 flex flex-col items-center justify-center text-slate-500 text-xs gap-2">
+                      <Terminal className="h-8 w-8 text-slate-600/50 stroke-1" />
+                      <span>暂无执行日志，点击下方「单算子推演」即可实测</span>
                     </div>
                   )}
                 </div>
               </div>
             )}
 
-            {/* Actions */}
-            <div className="pt-2.5 border-t border-slate-800/80">
-              <button
-                onClick={handleDeleteCurrentNode}
-                className="w-full flex items-center justify-center gap-1 px-2.5 py-1.5 text-xs font-medium text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/25 rounded-md transition-colors"
-              >
-                <Trash2 className="h-3 w-3" />
-                <span>删除此节点</span>
-              </button>
-            </div>
+            {/* TAB 3: 算子标准 (GUIDE) */}
+            {activeTab === "guide" && (
+              <div className="space-y-3">
+                <Card
+                  shadow="none"
+                  className="border border-slate-200/80 dark:border-slate-800/80 bg-slate-50/60 dark:bg-slate-900/40 rounded-2xl p-4 space-y-2.5"
+                >
+                  <div className="flex items-center gap-2 text-xs font-bold text-slate-800 dark:text-slate-200">
+                    <Info className="h-4 w-4 text-blue-500" />
+                    <span>企业级代码门禁标准</span>
+                  </div>
+                  <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                    FlowDev-AI 遵循左移质量管控思想。该算子部署在开发者提交前（Pre-Commit）环节，对增量文件进行纳秒级拦截与推演。
+                  </p>
+                  <Divider className="my-2" />
+                  <div className="space-y-2 text-xs text-slate-700 dark:text-slate-300">
+                    <div className="flex items-start gap-2">
+                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0 mt-0.5" />
+                      <span>零网络外溢，在本地和企业私有算力中推演</span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0 mt-0.5" />
+                      <span>严格遵循 Kahn DAG 拓扑顺序调度执行</span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0 mt-0.5" />
+                      <span>判定不合格时返回 Exit 1，直接掐断提交</span>
+                    </div>
+                  </div>
+                </Card>
+              </div>
+            )}
+
           </>
         ) : (
-          /* Global Info */
-          <div className="space-y-3">
-            <div className="p-2.5 bg-slate-900/60 border border-slate-800 rounded-lg">
-              <div className="flex items-center gap-1.5 text-xs font-medium text-slate-200 mb-1">
-                <Workflow className="h-3.5 w-3.5 text-blue-400" />
-                <span>多 Agent 协同流程</span>
+          /* Global Info State (When No Node is Selected) */
+          <div className="space-y-3.5">
+            <Card
+              shadow="none"
+              className="border border-slate-200/80 dark:border-slate-800/80 bg-slate-50/70 dark:bg-slate-900/50 rounded-2xl p-3.5 space-y-2"
+            >
+              <div className="flex items-center gap-2 text-xs font-bold text-slate-800 dark:text-slate-200">
+                <Workflow className="h-4 w-4 text-blue-500" />
+                <span>多 Agent 门禁流水线编排</span>
               </div>
-              <p className="text-[10px] text-slate-400 leading-relaxed">
-                当前工作流已配置 4 类标准化节点。点击画布中的节点可在此微调其提示词、模型温度与断言策略。
+              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                当前工作流由 4 类标准化质量门禁算子构成。点击左侧画布中的任意节点或右键选择「配置属性」，即可在此定制提示词、模型温度与断言策略。
               </p>
-            </div>
+            </Card>
 
-            <div className="space-y-1.5 text-xs text-slate-400">
-              <div className="flex justify-between py-1 border-b border-slate-800/60">
-                <span>画布节点总数</span>
-                <span className="font-mono text-slate-200">{nodes.length}</span>
+            <Card
+              shadow="none"
+              className="border border-slate-200/80 dark:border-slate-800/80 bg-white/70 dark:bg-slate-900/40 rounded-2xl p-3.5 space-y-2.5"
+            >
+              <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                画布拓扑统计
               </div>
-              <div className="flex justify-between py-1 border-b border-slate-800/60">
-                <span>拓扑依赖连线</span>
-                <span className="font-mono text-slate-200">{edges.length}</span>
+              <div className="space-y-2 text-xs text-slate-600 dark:text-slate-400">
+                <div className="flex justify-between py-1 border-b border-slate-200/60 dark:border-slate-800/60">
+                  <span>算子节点数</span>
+                  <span className="font-mono text-slate-800 dark:text-slate-200 font-bold">
+                    ${nodes.length} 个
+                  </span>
+                </div>
+                <div className="flex justify-between py-1 border-b border-slate-200/60 dark:border-slate-800/60">
+                  <span>拓扑依赖边</span>
+                  <span className="font-mono text-slate-800 dark:text-slate-200 font-bold">
+                    ${edges.length} 条
+                  </span>
+                </div>
+                <div className="flex justify-between py-1">
+                  <span>调度引擎</span>
+                  <span className="font-mono text-blue-600 dark:text-blue-400 font-bold">
+                    FastAPI + Kahn DAG
+                  </span>
+                </div>
               </div>
-              <div className="flex justify-between py-1 border-b border-slate-800/60">
-                <span>调度引擎</span>
-                <span className="font-mono text-slate-200">FastAPI + Kahn DAG</span>
-              </div>
-            </div>
+            </Card>
 
-            <div className="p-2 rounded-md border border-blue-500/20 bg-blue-500/5 text-[10px] text-blue-300">
-              💡 提示：抽屉采用浮动层设计，不挤压中间画布；可按 Esc 或点击空白区域收起。
+            <div className="p-3 rounded-2xl border border-blue-200/80 dark:border-blue-500/20 bg-blue-50/50 dark:bg-blue-500/5 text-xs text-blue-700 dark:text-blue-300 leading-relaxed">
+              💡 提示：在画布中选中任意节点，或右键选择「配置属性」，即可在此处定制拦截规则。
             </div>
           </div>
         )}
       </div>
+
+      {/* Persistent Footer Actions */}
+      {selectedNode && activeData && (
+        <div className="p-3 border-t border-slate-200/90 dark:border-slate-800/90 bg-slate-50/80 dark:bg-slate-900/80 backdrop-blur-xs flex items-center gap-2 shrink-0">
+          <Button
+            color="primary"
+            variant="flat"
+            size="sm"
+            className="flex-1 font-semibold rounded-xl"
+            startContent={<Play className="h-3.5 w-3.5 text-primary" />}
+            onClick={handleSimulateCurrentNode}
+          >
+            单算子实测推演
+          </Button>
+          <Button
+            color="danger"
+            variant="light"
+            size="sm"
+            className="font-medium rounded-xl text-rose-500"
+            startContent={<Trash2 className="h-3.5 w-3.5" />}
+            onClick={handleDeleteCurrentNode}
+          >
+            删除
+          </Button>
+        </div>
+      )}
     </aside>
   );
 }

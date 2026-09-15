@@ -43,33 +43,33 @@ const statusConfig: Record<
 > = {
   idle: {
     icon: Clock,
-    color: "text-slate-400",
-    bg: "bg-slate-500/10",
-    border: "border-slate-600/30",
+    color: "text-slate-500 dark:text-slate-400",
+    bg: "bg-slate-100 dark:bg-slate-500/10",
+    border: "border-slate-200 dark:border-slate-600/30",
     label: "就绪",
     spin: false,
   },
   running: {
     icon: Loader2,
-    color: "text-blue-400",
-    bg: "bg-blue-500/15",
-    border: "border-blue-500/40",
+    color: "text-blue-600 dark:text-blue-400",
+    bg: "bg-blue-50 dark:bg-blue-500/15",
+    border: "border-blue-200 dark:border-blue-500/40",
     label: "运行中",
     spin: true,
   },
   completed: {
     icon: CheckCircle2,
-    color: "text-emerald-400",
-    bg: "bg-emerald-500/15",
-    border: "border-emerald-500/40",
+    color: "text-emerald-600 dark:text-emerald-400",
+    bg: "bg-emerald-50 dark:bg-emerald-500/15",
+    border: "border-emerald-200 dark:border-emerald-500/40",
     label: "已完成",
     spin: false,
   },
   error: {
     icon: AlertCircle,
-    color: "text-rose-400",
-    bg: "bg-rose-500/15",
-    border: "border-rose-500/40",
+    color: "text-rose-600 dark:text-rose-400",
+    bg: "bg-rose-50 dark:bg-rose-500/15",
+    border: "border-rose-200 dark:border-rose-500/40",
     label: "异常",
     spin: false,
   },
@@ -103,7 +103,8 @@ export const BaseNodeCard = memo(
     return (
       <div
         className={cn(
-          "group relative min-w-[275px] max-w-[325px] rounded-xl border bg-slate-900/95 p-3.5 shadow-xl backdrop-blur transition-all duration-200 select-none",
+          "group relative min-w-[275px] max-w-[325px] rounded-xl border p-3.5 shadow-md dark:shadow-xl backdrop-blur transition-all duration-200 select-none",
+          "bg-white/95 dark:bg-slate-900/95 text-slate-800 dark:text-slate-100",
           // Running state: glowing pulsing blue border & shadow
           isRunning &&
             "border-blue-500 ring-2 ring-blue-500/60 shadow-xl shadow-blue-500/25 animate-pulse",
@@ -115,7 +116,7 @@ export const BaseNodeCard = memo(
             "border-blue-500 ring-2 ring-blue-500/40 shadow-blue-500/15",
           // Default idle state
           !selected && !isRunning && !isCompleted &&
-            "border-slate-800 hover:border-slate-700 hover:shadow-slate-800/40"
+            "border-slate-200/90 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 hover:shadow-lg"
         )}
       >
         {/* Left Target Handle */}
@@ -124,7 +125,7 @@ export const BaseNodeCard = memo(
             type="target"
             position={Position.Left}
             id={targetHandleId}
-            className="!h-3.5 !w-3.5 !-left-2 !rounded-full !border-2 !border-slate-950 !bg-blue-500 transition-all hover:!scale-125 hover:!bg-blue-400 cursor-crosshair"
+            className="!h-3.5 !w-3.5 !-left-2 !rounded-full !border-2 !border-white dark:!border-slate-950 !bg-blue-500 transition-all hover:!scale-125 hover:!bg-blue-400 cursor-crosshair"
           />
         )}
 
@@ -140,10 +141,10 @@ export const BaseNodeCard = memo(
               <Icon className={cn("h-4 w-4", iconColor)} />
             </div>
             <div>
-              <h4 className="text-xs font-semibold text-slate-100 tracking-tight leading-snug">
+              <h4 className="text-xs font-semibold text-slate-900 dark:text-slate-100 tracking-tight leading-snug">
                 {title}
               </h4>
-              <span className="text-[10px] font-mono text-slate-400">
+              <span className="text-[10px] font-mono text-slate-500 dark:text-slate-400">
                 {typeBadge}
               </span>
             </div>
@@ -170,14 +171,14 @@ export const BaseNodeCard = memo(
 
         {/* Live Streaming Log Ticker (visible when running or has logs) */}
         {latestLog && (
-          <div className="mt-2.5 pt-2 border-t border-slate-800/80 flex items-start gap-1.5 text-[10px] font-mono text-slate-400 bg-slate-950/40 px-2 py-1 rounded">
+          <div className="mt-2.5 pt-2 border-t border-slate-200/80 dark:border-slate-800/80 flex items-start gap-1.5 text-[10px] font-mono text-slate-600 dark:text-slate-400 bg-slate-50 dark:bg-slate-950/40 px-2 py-1 rounded">
             <Terminal
               className={cn(
                 "h-3 w-3 mt-0.5 shrink-0",
-                isRunning ? "text-blue-400 animate-spin" : "text-emerald-400"
+                isRunning ? "text-blue-500 animate-spin" : "text-emerald-500 dark:text-emerald-400"
               )}
             />
-            <span className="truncate leading-tight text-slate-300">
+            <span className="truncate leading-tight text-slate-700 dark:text-slate-300">
               {latestLog}
             </span>
           </div>
@@ -189,7 +190,7 @@ export const BaseNodeCard = memo(
             type="source"
             position={Position.Right}
             id={sourceHandleId}
-            className="!h-3.5 !w-3.5 !-right-2 !rounded-full !border-2 !border-slate-950 !bg-indigo-500 transition-all hover:!scale-125 hover:!bg-indigo-400 cursor-crosshair"
+            className="!h-3.5 !w-3.5 !-right-2 !rounded-full !border-2 !border-white dark:!border-slate-950 !bg-indigo-500 transition-all hover:!scale-125 hover:!bg-indigo-400 cursor-crosshair"
           />
         )}
       </div>

@@ -29,7 +29,7 @@ export default function Home() {
   }, [initFromStorage]);
 
   return (
-    <main className="flex flex-col h-screen w-screen overflow-hidden bg-slate-950">
+    <main className="flex flex-col h-screen w-screen overflow-hidden bg-slate-50 text-slate-900 dark:bg-[#0b0f19] dark:text-slate-100 transition-colors duration-200">
       {/* 顶部导航栏 */}
       <Header />
 

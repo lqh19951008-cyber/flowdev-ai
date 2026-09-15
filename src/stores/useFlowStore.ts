@@ -300,7 +300,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   activePresetId: "full_review_heal",
 
   // Main Navigation View: "dashboard" vs "pipeline"
-  activeViewMode: "dashboard",
+  activeViewMode: "pipeline",
   setActiveViewMode: (mode: ActiveViewMode) => set({ activeViewMode: mode }),
 
   // Multi-Tenant & Live Guard State
@@ -345,7 +345,6 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   setSelectedNode: (node) => {
     set({
       selectedNode: node,
-      isDrawerOpen: node !== null ? true : get().isDrawerOpen,
     });
   },
 
