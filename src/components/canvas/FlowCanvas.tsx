@@ -80,7 +80,7 @@ function FlowCanvasInner({ showMiniMap = true }: { showMiniMap?: boolean }) {
     clientY: number;
   } | null>(null);
 
-  // Close context menus on global click or Escape
+  // Close context menus on global click or Escape, delete node on Delete key
   useEffect(() => {
     const handleGlobalClick = () => {
       setNodeContextMenu(null);
@@ -91,11 +91,27 @@ function FlowCanvasInner({ showMiniMap = true }: { showMiniMap?: boolean }) {
         setNodeContextMenu(null);
         setPaneContextMenu(null);
       }
-      if (e.key === "Delete" && selectedNode) {
-        setNodes(nodes.filter((n) => n.id !== selectedNode.id));
-        setEdges(edges.filter((e) => e.source !== selectedNode.id && e.target !== selectedNode.id));
-        setSelectedNode(null);
-        toggleDrawer(false);
+      if (e.key === "Delete" || e.key === "Backspace") {
+        // Only delete node if not typing in an input/textarea
+        const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+        if (tag === "input" || tag === "textarea" || (e.target as HTMLElement)?.isContentEditable) {
+          return;
+        }
+
+        const state = useFlowStore.getState();
+        const currentSelected = state.selectedNode;
+        if (currentSelected) {
+          state.setNodes(state.nodes.filter((n) => n.id !== currentSelected.id));
+          state.setEdges(
+            state.edges.filter(
+              (edge) =>
+                edge.source !== currentSelected.id &&
+                edge.target !== currentSelected.id
+            )
+          );
+          state.setSelectedNode(null);
+          state.toggleDrawer(false);
+        }
       }
     };
 
@@ -105,7 +121,7 @@ function FlowCanvasInner({ showMiniMap = true }: { showMiniMap?: boolean }) {
       window.removeEventListener("click", handleGlobalClick);
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [nodes, edges, selectedNode, setNodes, setEdges, setSelectedNode, toggleDrawer]);
+  }, []);
 
   // Register the 4 custom node types
   const nodeTypes: NodeTypes = useMemo(
@@ -121,17 +137,23 @@ function FlowCanvasInner({ showMiniMap = true }: { showMiniMap?: boolean }) {
   // HTML5 Drag and Drop handlers
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
+    event.stopPropagation();
     event.dataTransfer.dropEffect = "move";
   }, []);
 
   const onDrop = useCallback(
     (event: React.DragEvent) => {
       event.preventDefault();
-      const type = event.dataTransfer.getData(
-        "application/reactflow"
-      ) as FlowNodeType;
+      event.stopPropagation();
+      const type = (
+        event.dataTransfer.getData("application/reactflow") ||
+        event.dataTransfer.getData("text/plain") ||
+        event.dataTransfer.getData("text")
+      ).trim() as FlowNodeType;
 
-      if (!type) return;
+      if (!type || !["code_input", "llm_review", "test_generator", "diff_export"].includes(type)) {
+        return;
+      }
 
       const position = screenToFlowPosition({
         x: event.clientX,

@@ -22,7 +22,10 @@ export default function Home() {
     initFromStorage();
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
-      if (params.get("view") === "pipeline" || window.location.hash === "#pipeline") {
+      const viewParam = params.get("view");
+      if (viewParam === "dashboard" || window.location.hash === "#dashboard") {
+        useFlowStore.getState().setActiveViewMode("dashboard");
+      } else if (viewParam === "pipeline" || window.location.hash === "#pipeline") {
         useFlowStore.getState().setActiveViewMode("pipeline");
       }
     }

@@ -11,21 +11,25 @@ import {
   Clock,
   Radio,
   FileCode,
+  CheckCheck,
 } from "lucide-react";
 import { useFlowStore } from "@/stores/useFlowStore";
 import { ScanEventItem } from "@/types/flow";
-import { cn } from "@/lib/utils";
+import { cn, formatTime, formatRelativeTime } from "@/lib/utils";
 
 export function LiveGuardFeed() {
   const {
     addLiveEvent,
     recentEvents,
+    readEventIds,
+    markEventAsRead,
+    markAllEventsAsRead,
     unreadEventsCount,
     clearUnreadEventsCount,
     isLiveFeedOpen,
     setLiveFeedOpen,
     setSelectedProjectId,
-    setProjectStatsModalOpen,
+    setActiveViewMode,
   } = useFlowStore();
 
   const [activeToast, setActiveToast] = useState<ScanEventItem | null>(null);
@@ -156,8 +160,9 @@ export function LiveGuardFeed() {
               <button
                 onClick={() => {
                   setToastVisible(false);
+                  markEventAsRead(activeToast.id);
                   setSelectedProjectId(activeToast.project_id);
-                  setProjectStatsModalOpen(true);
+                  setActiveViewMode("dashboard");
                 }}
                 className="ml-auto text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 flex items-center gap-1 font-sans font-medium"
               >
@@ -189,7 +194,6 @@ export function LiveGuardFeed() {
           className="fixed inset-0 z-40 bg-black/40 backdrop-blur-xs"
           onClick={() => {
             setLiveFeedOpen(false);
-            clearUnreadEventsCount();
           }}
         >
           <div
@@ -216,18 +220,30 @@ export function LiveGuardFeed() {
                       : "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400"
                   )}
                 >
-                  {isConnected ? "SSE 实时监听中" : "连接重试中"}
+                  {isConnected ? "SSE 监听中" : "连接重试中"}
                 </span>
               </div>
-              <button
-                onClick={() => {
-                  setLiveFeedOpen(false);
-                  clearUnreadEventsCount();
-                }}
-                className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 p-1"
-              >
-                <X className="h-4 w-4" />
-              </button>
+
+              <div className="flex items-center gap-1.5">
+                {unreadEventsCount > 0 && (
+                  <button
+                    onClick={() => markAllEventsAsRead()}
+                    className="text-[11px] text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 font-medium flex items-center gap-0.5 px-1.5 py-0.5 rounded hover:bg-blue-50 dark:hover:bg-blue-950/40 transition-colors"
+                    title="全部标为已读"
+                  >
+                    <CheckCheck className="h-3 w-3" />
+                    <span>全读</span>
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    setLiveFeedOpen(false);
+                  }}
+                  className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 p-1"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
             </div>
 
             {/* Event List */}
@@ -237,68 +253,81 @@ export function LiveGuardFeed() {
                   暂无拦截事件记录。在任何接入项目中运行 git commit 将在此实时播报。
                 </div>
               ) : (
-                recentEvents.map((event) => (
-                  <div
-                    key={event.id}
-                    onClick={() => {
-                      setSelectedProjectId(event.project_id);
-                      setLiveFeedOpen(false);
-                      setProjectStatsModalOpen(true);
-                    }}
-                    className={cn(
-                      "p-2.5 rounded-xl border text-xs cursor-pointer transition-all hover:scale-[1.01] shadow-xs",
-                      event.passed
-                        ? "bg-slate-50/80 dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 hover:border-emerald-500/30"
-                        : "bg-rose-50/60 dark:bg-rose-950/20 border-rose-200 dark:border-rose-900/40 hover:border-rose-500/50"
-                    )}
-                  >
-                    <div className="flex items-center justify-between gap-1 mb-1">
-                      <div className="flex items-center gap-1.5">
-                        <span
-                          className={cn(
-                            "px-1.5 py-0.5 rounded text-[10px] font-semibold",
-                            event.passed
-                              ? "bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
-                              : "bg-rose-100 dark:bg-rose-500/15 text-rose-700 dark:text-rose-400"
+                recentEvents.map((event) => {
+                  const isRead = readEventIds.includes(event.id);
+
+                  return (
+                    <div
+                      key={event.id}
+                      onClick={() => {
+                        markEventAsRead(event.id);
+                        setSelectedProjectId(event.project_id);
+                        setLiveFeedOpen(false);
+                        setActiveViewMode("dashboard");
+                      }}
+                      className={cn(
+                        "p-2.5 rounded-xl border text-xs cursor-pointer transition-all hover:scale-[1.01] shadow-xs relative",
+                        event.passed
+                          ? "bg-slate-50/80 dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 hover:border-emerald-500/30"
+                          : "bg-rose-50/60 dark:bg-rose-950/20 border-rose-200 dark:border-rose-900/40 hover:border-rose-500/50",
+                        !isRead && "ring-1 ring-blue-500/40 bg-blue-50/30 dark:bg-blue-950/20"
+                      )}
+                    >
+                      <div className="flex items-center justify-between gap-1 mb-1">
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className={cn(
+                              "px-1.5 py-0.5 rounded text-[10px] font-semibold",
+                              event.passed
+                                ? "bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+                                : "bg-rose-100 dark:bg-rose-500/15 text-rose-700 dark:text-rose-400"
+                            )}
+                          >
+                            {event.passed ? "放行" : "拦截"}
+                          </span>
+                          <span className="font-mono text-blue-600 dark:text-cyan-400 font-medium">
+                            {event.project_id}
+                          </span>
+
+                          {!isRead && (
+                            <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse ml-0.5" />
                           )}
-                        >
-                          {event.passed ? "放行" : "拦截"}
-                        </span>
-                        <span className="font-mono text-blue-600 dark:text-cyan-400 font-medium">
-                          {event.project_id}
+                        </div>
+                        <span className="text-[10px] text-slate-400 dark:text-slate-500 flex items-center gap-1 font-mono">
+                          <Clock className="h-2.5 w-2.5" />
+                          {formatRelativeTime(event.created_at)}
                         </span>
                       </div>
-                      <span className="text-[10px] text-slate-400 dark:text-slate-500 flex items-center gap-1">
-                        <Clock className="h-2.5 w-2.5" />
-                        {new Date(event.created_at).toLocaleTimeString()}
-                      </span>
-                    </div>
 
-                    <p className="text-slate-700 dark:text-slate-300 line-clamp-1 text-[11px] mb-1.5">
-                      {event.summary}
-                    </p>
+                      <p className={cn(
+                        "text-slate-700 dark:text-slate-300 line-clamp-1 text-[11px] mb-1.5",
+                        !isRead ? "font-medium" : "font-normal"
+                      )}>
+                        {event.summary}
+                      </p>
 
-                    <div className="flex items-center justify-between text-[10px] text-slate-500 dark:text-slate-400 font-mono">
-                      <span>{event.committer}</span>
-                      <span className="flex items-center gap-1">
-                        <FileCode className="h-3 w-3 text-slate-400 dark:text-slate-500" />
-                        {event.files_count} 文件
-                      </span>
+                      <div className="flex items-center justify-between text-[10px] text-slate-500 dark:text-slate-400 font-mono">
+                        <span>{event.committer}</span>
+                        <span className="flex items-center gap-1">
+                          <FileCode className="h-3 w-3 text-slate-400 dark:text-slate-500" />
+                          {event.files_count} 文件
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
 
             {/* Footer */}
             <div className="pt-2 border-t border-slate-200 dark:border-slate-800 flex justify-between items-center">
               <span className="text-[11px] text-slate-400 dark:text-slate-500">
-                最近 {recentEvents.length} 次审查事件
+                最近 {recentEvents.length} 次审查记录
               </span>
               <button
                 onClick={() => {
                   setLiveFeedOpen(false);
-                  setProjectStatsModalOpen(true);
+                  setActiveViewMode("dashboard");
                 }}
                 className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 font-medium flex items-center gap-1"
               >

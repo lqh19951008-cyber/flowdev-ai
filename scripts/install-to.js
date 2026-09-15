@@ -70,6 +70,9 @@ const hookContent = `#!/bin/sh
 # FlowDev-AI Pre-Commit Guard (Local Personal Probe)
 # 100% 本地个人专属，不会被 Git 提交，对团队其他成员零污染、零感知
 
+export LANG="zh_CN.UTF-8"
+export LC_ALL="zh_CN.UTF-8"
+
 node "${flowDevHookScript}"
 FLOWDEV_EXIT=$?
 

@@ -17,10 +17,14 @@ import {
   TrendingUp,
   AlertTriangle,
   Radio,
+  CheckCheck,
+  Mail,
+  MailOpen,
+  Eye,
 } from "lucide-react";
 import { Chip } from "@heroui/react";
 import { useFlowStore } from "@/stores/useFlowStore";
-import { cn } from "@/lib/utils";
+import { cn, formatTime, formatRelativeTime, formatDate } from "@/lib/utils";
 
 export function QualityDashboardView() {
   const {
@@ -28,6 +32,12 @@ export function QualityDashboardView() {
     selectedProjectId,
     setSelectedProjectId,
     recentEvents,
+    readEventIds,
+    markEventAsRead,
+    markAllEventsAsRead,
+    toggleEventRead,
+    isEventRead,
+    unreadEventsCount,
     fetchProjects,
     fetchRecentEvents,
     setActiveViewMode,
@@ -58,11 +68,16 @@ export function QualityDashboardView() {
   const totalBlocked = totalScans - totalPassed;
   const overallPassRate = totalScans > 0 ? ((totalPassed / totalScans) * 100).toFixed(1) : "100.0";
 
+  // Unread count within the selected project scope
+  const scopedEvents = recentEvents.filter(
+    (ev) => selectedProjectId === "all" || ev.project_id === selectedProjectId
+  );
+  const unreadScopedCount = scopedEvents.filter((ev) => !readEventIds.includes(ev.id)).length;
+
   // Filtered events
-  const filteredEvents = recentEvents.filter((ev) => {
-    if (selectedProjectId !== "all" && ev.project_id !== selectedProjectId) {
-      return false;
-    }
+  const filteredEvents = scopedEvents.filter((ev) => {
+    const isRead = readEventIds.includes(ev.id);
+    if (filterPassed === "unread" && isRead) return false;
     if (filterPassed === "passed" && !ev.passed) return false;
     if (filterPassed === "blocked" && ev.passed) return false;
     if (searchKeyword.trim()) {
@@ -247,10 +262,15 @@ export function QualityDashboardView() {
 
                 {/* Card footer */}
                 <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
-                  <div>
+                  <div className="flex items-center gap-1">
                     <span>审查 {proj.total_scans} 次</span>
-                    <span className="mx-1.5 text-slate-300 dark:text-slate-600">/</span>
+                    <span className="text-slate-300 dark:text-slate-600">/</span>
                     <span className="text-emerald-600 dark:text-emerald-400 font-medium">放行 {proj.passed_scans} 次</span>
+                    {proj.last_scan_at && (
+                      <span className="hidden xl:inline text-slate-400 dark:text-slate-500 font-mono ml-1">
+                        · {formatRelativeTime(proj.last_scan_at)}
+                      </span>
+                    )}
                   </div>
 
                   <button
@@ -275,7 +295,7 @@ export function QualityDashboardView() {
       {/* All-Team Commit Audit Log Table */}
       <div className="space-y-3">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-          <div>
+          <div className="flex items-center gap-2.5 flex-wrap">
             <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-200 flex items-center gap-2">
               <Clock className="h-4 w-4 text-blue-500 dark:text-blue-400" />
               全员提交拦截与审计流水
@@ -283,22 +303,40 @@ export function QualityDashboardView() {
                 ({selectedProjectId === "all" ? "全部仓库" : `仓库: ${selectedProjectId}`})
               </span>
             </h2>
+
+            {unreadScopedCount > 0 && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
+                <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
+                {unreadScopedCount} 条未读
+              </span>
+            )}
           </div>
 
-          {/* Filter controls */}
+          {/* Filter controls & Batch actions */}
           <div className="flex items-center gap-2 flex-wrap">
-            <div className="relative">
-              <Search className="h-3.5 w-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+            {unreadScopedCount > 0 && (
+              <button
+                onClick={() => markAllEventsAsRead()}
+                className="h-7 flex items-center gap-1.5 px-2.5 text-xs font-medium text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 dark:hover:bg-blue-900/60 border border-blue-200 dark:border-blue-800/80 rounded-lg transition-colors shadow-xs shrink-0"
+                title="将当前全部未读提交审计标记为已读"
+              >
+                <CheckCheck className="h-3.5 w-3.5" />
+                <span>一键全读</span>
+              </button>
+            )}
+
+            <div className="relative flex items-center">
+              <Search className="h-3.5 w-3.5 text-slate-400 dark:text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none shrink-0" />
               <input
                 type="text"
                 value={searchKeyword}
                 onChange={(e) => setSearchKeyword(e.target.value)}
                 placeholder="搜索提交人、缺陷、仓库..."
-                className="pl-8 pr-3 py-1 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-800 dark:text-slate-200 focus:outline-none focus:border-blue-500 w-48 shadow-sm"
+                className="pl-8 pr-3 h-7 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-800 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:border-blue-500 w-44 sm:w-52 shadow-xs transition-colors"
               />
             </div>
 
-            <div className="flex items-center rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-0.5 text-xs shadow-sm">
+            <div className="flex items-center h-7 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-0.5 text-xs shadow-xs">
               <button
                 onClick={() => setFilterPassed("all")}
                 className={cn(
@@ -311,11 +349,27 @@ export function QualityDashboardView() {
                 全部
               </button>
               <button
+                onClick={() => setFilterPassed("unread")}
+                className={cn(
+                  "px-2.5 py-0.5 rounded text-xs transition-colors font-medium flex items-center gap-1",
+                  filterPassed === "unread"
+                    ? "bg-blue-50 dark:bg-blue-500/20 text-blue-600 dark:text-blue-300 shadow-xs font-semibold"
+                    : "text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-slate-200"
+                )}
+              >
+                <span>未读</span>
+                {unreadScopedCount > 0 && (
+                  <span className="px-1 py-0.2 rounded-full text-[9px] bg-blue-500 text-white font-mono leading-none">
+                    {unreadScopedCount}
+                  </span>
+                )}
+              </button>
+              <button
                 onClick={() => setFilterPassed("blocked")}
                 className={cn(
                   "px-2.5 py-0.5 rounded text-xs transition-colors font-medium",
                   filterPassed === "blocked"
-                    ? "bg-rose-50 dark:bg-rose-500/20 text-rose-600 dark:text-rose-300 shadow-xs"
+                    ? "bg-rose-50 dark:bg-rose-500/20 text-rose-600 dark:text-rose-300 shadow-xs font-semibold"
                     : "text-slate-500 dark:text-slate-400 hover:text-rose-600 dark:hover:text-slate-200"
                 )}
               >
@@ -326,7 +380,7 @@ export function QualityDashboardView() {
                 className={cn(
                   "px-2.5 py-0.5 rounded text-xs transition-colors font-medium",
                   filterPassed === "passed"
-                    ? "bg-emerald-50 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 shadow-xs"
+                    ? "bg-emerald-50 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 shadow-xs font-semibold"
                     : "text-slate-500 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-slate-200"
                 )}
               >
@@ -341,12 +395,12 @@ export function QualityDashboardView() {
           <table className="w-full text-left text-xs text-slate-700 dark:text-slate-300">
             <thead className="bg-slate-50/80 dark:bg-slate-900/80 border-b border-slate-200/80 dark:border-slate-800 text-[11px] text-slate-500 dark:text-slate-400 font-medium">
               <tr>
-                <th className="py-2.5 px-3">判定状态</th>
+                <th className="py-2.5 px-3">状态</th>
                 <th className="py-2.5 px-3">仓库</th>
                 <th className="py-2.5 px-3">提交者 / 分支</th>
                 <th className="py-2.5 px-3">文件数</th>
                 <th className="py-2.5 px-4">门禁审查结论与缺陷</th>
-                <th className="py-2.5 px-3">时间</th>
+                <th className="py-2.5 px-3">审查时间</th>
                 <th className="py-2.5 px-3 text-right">操作</th>
               </tr>
             </thead>
@@ -354,43 +408,67 @@ export function QualityDashboardView() {
               {filteredEvents.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="text-center py-10 text-slate-400 dark:text-slate-500">
-                    暂无符合条件的门禁提交记录。在任意接入项目中执行 git commit 将在此全量留痕。
+                    {filterPassed === "unread"
+                      ? "暂无未读记录，所有提交已全部阅毕。"
+                      : "暂无符合条件的门禁提交记录。在任意接入项目中执行 git commit 将在此全量留痕。"}
                   </td>
                 </tr>
               ) : (
                 filteredEvents.map((ev) => {
                   const isExpanded = selectedEventId === ev.id;
+                  const isRead = readEventIds.includes(ev.id);
+
                   return (
                     <React.Fragment key={ev.id}>
                       <tr
                         className={cn(
                           "hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors cursor-pointer",
-                          !ev.passed && "bg-rose-50/30 dark:bg-rose-950/10"
+                          !ev.passed && "bg-rose-50/20 dark:bg-rose-950/10",
+                          !isRead && "bg-blue-50/20 dark:bg-blue-950/10 font-medium"
                         )}
-                        onClick={() => setSelectedEventId(isExpanded ? null : ev.id)}
+                        onClick={() => {
+                          setSelectedEventId(isExpanded ? null : ev.id);
+                          if (!isRead) markEventAsRead(ev.id);
+                        }}
                       >
                         <td className="py-2.5 px-3 whitespace-nowrap">
-                          {ev.passed ? (
-                            <Chip
-                              size="sm"
-                              color="success"
-                              variant="flat"
-                              className="font-medium text-[11px] h-6"
-                              startContent={<ShieldCheck className="h-3 w-3" />}
-                            >
-                              放行
-                            </Chip>
-                          ) : (
-                            <Chip
-                              size="sm"
-                              color="danger"
-                              variant="flat"
-                              className="font-medium text-[11px] h-6"
-                              startContent={<ShieldAlert className="h-3 w-3" />}
-                            >
-                              拦截
-                            </Chip>
-                          )}
+                          <div className="flex items-center gap-1.5">
+                            {ev.passed ? (
+                              <Chip
+                                size="sm"
+                                color="success"
+                                variant="flat"
+                                className="font-medium text-[11px] h-6"
+                                startContent={<ShieldCheck className="h-3 w-3" />}
+                              >
+                                放行
+                              </Chip>
+                            ) : (
+                              <Chip
+                                size="sm"
+                                color="danger"
+                                variant="flat"
+                                className="font-medium text-[11px] h-6"
+                                startContent={<ShieldAlert className="h-3 w-3" />}
+                              >
+                                拦截
+                              </Chip>
+                            )}
+
+                            {!isRead ? (
+                              <span
+                                className="inline-flex items-center gap-1 text-[10px] font-semibold text-blue-600 dark:text-cyan-300 bg-blue-50 dark:bg-cyan-500/15 border border-blue-200 dark:border-cyan-500/30 px-1.5 py-0.5 rounded-full"
+                                title="未读记录"
+                              >
+                                <span className="h-1.5 w-1.5 rounded-full bg-blue-500 dark:bg-cyan-400 animate-pulse" />
+                                未读
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-slate-400 dark:text-slate-500 font-mono px-1">
+                                已读
+                              </span>
+                            )}
+                          </div>
                         </td>
 
                         <td className="py-2.5 px-3 font-mono font-medium text-blue-600 dark:text-cyan-300">
@@ -416,7 +494,10 @@ export function QualityDashboardView() {
                         </td>
 
                         <td className="py-2.5 px-4 max-w-md">
-                          <div className="line-clamp-1 font-medium text-slate-800 dark:text-slate-200">
+                          <div className={cn(
+                            "line-clamp-1 text-slate-800 dark:text-slate-200",
+                            !isRead ? "font-semibold" : "font-normal"
+                          )}>
                             {ev.summary}
                           </div>
                           {ev.critical_issues.length > 0 && (
@@ -427,20 +508,49 @@ export function QualityDashboardView() {
                           )}
                         </td>
 
-                        <td className="py-2.5 px-3 whitespace-nowrap text-[11px] text-slate-500 dark:text-slate-400">
-                          {new Date(ev.created_at).toLocaleString()}
+                        <td className="py-2.5 px-3 whitespace-nowrap text-slate-600 dark:text-slate-400">
+                          <div className="font-mono text-xs text-slate-800 dark:text-slate-200">
+                            {formatTime(ev.created_at)}
+                          </div>
+                          <div className="text-[10px] text-slate-400 dark:text-slate-500 font-mono mt-0.5 flex items-center gap-1">
+                            <Clock className="h-2.5 w-2.5 text-slate-400" />
+                            <span>{formatRelativeTime(ev.created_at)}</span>
+                          </div>
                         </td>
 
-                        <td className="py-2.5 px-3 text-right">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedEventId(isExpanded ? null : ev.id);
-                            }}
-                            className="text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 text-xs font-medium"
-                          >
-                            {isExpanded ? "收起" : "展开详情"}
-                          </button>
+                        <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleEventRead(ev.id);
+                              }}
+                              className={cn(
+                                "p-1 rounded text-xs transition-colors",
+                                isRead
+                                  ? "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                                  : "text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950/40"
+                              )}
+                              title={isRead ? "标为未读" : "标为已读"}
+                            >
+                              {isRead ? (
+                                <Mail className="h-3.5 w-3.5" />
+                              ) : (
+                                <MailOpen className="h-3.5 w-3.5" />
+                              )}
+                            </button>
+
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedEventId(isExpanded ? null : ev.id);
+                                if (!isRead) markEventAsRead(ev.id);
+                              }}
+                              className="text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 text-xs font-medium px-1.5 py-0.5 rounded hover:bg-blue-50 dark:hover:bg-blue-950/40"
+                            >
+                              {isExpanded ? "收起" : "展开详情"}
+                            </button>
+                          </div>
                         </td>
                       </tr>
 
@@ -449,12 +559,15 @@ export function QualityDashboardView() {
                         <tr className="bg-slate-50/70 dark:bg-slate-900/80">
                           <td colSpan={7} className="p-4 border-t border-slate-200/80 dark:border-slate-800">
                             <div className="space-y-3">
-                              <div>
-                                <div className="text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                              <div className="flex items-center justify-between">
+                                <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
                                   门禁审查结论概览:
                                 </div>
-                                <p className="text-xs text-slate-600 dark:text-slate-400">{ev.summary}</p>
+                                <div className="text-[11px] text-slate-400 font-mono">
+                                  记录 ID: {ev.id} · 提交时间: {formatTime(ev.created_at)} ({formatRelativeTime(ev.created_at)})
+                                </div>
                               </div>
+                              <p className="text-xs text-slate-600 dark:text-slate-400">{ev.summary}</p>
 
                               {ev.critical_issues.length > 0 && (
                                 <div className="p-3 rounded-lg bg-rose-50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900/40">

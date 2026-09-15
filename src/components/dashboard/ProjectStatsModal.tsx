@@ -19,7 +19,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useFlowStore } from "@/stores/useFlowStore";
-import { cn } from "@/lib/utils";
+import { cn, formatTime, formatRelativeTime } from "@/lib/utils";
 
 export function ProjectStatsModal() {
   const {
@@ -441,8 +441,13 @@ export function ProjectStatsModal() {
                               )}
                             </td>
 
-                            <td className="py-2.5 px-3 whitespace-nowrap text-[11px] text-slate-400">
-                              {new Date(ev.created_at).toLocaleString()}
+                            <td className="py-2.5 px-3 whitespace-nowrap text-slate-400">
+                              <div className="font-mono text-xs text-slate-200">
+                                {formatTime(ev.created_at)}
+                              </div>
+                              <div className="text-[10px] text-slate-500 font-mono mt-0.5">
+                                {formatRelativeTime(ev.created_at)}
+                              </div>
                             </td>
 
                             <td className="py-2.5 px-3 text-right">

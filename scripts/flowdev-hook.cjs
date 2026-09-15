@@ -33,11 +33,18 @@ const API_HOST = process.env.FLOWDEV_HOST || "127.0.0.1";
 const API_PORT = process.env.FLOWDEV_PORT || 8000;
 const API_PATH = "/api/cli/scan";
 
+// Set UTF-8 encoding for standard outputs if available
+if (process.stdout && process.stdout.setEncoding) {
+  try {
+    process.stdout.setEncoding("utf-8");
+  } catch (e) {}
+}
+
 function printBanner() {
-  console.log("\n" + c.cyan + c.bold + "╔══════════════════════════════════════════════════════════════╗" + c.reset);
-  console.log(c.cyan + c.bold + "║" + c.reset + "         🛡️  " + c.bold + "FlowDev-AI Pre-Commit Guard" + c.reset + "                      " + c.cyan + c.bold + "║" + c.reset);
-  console.log(c.cyan + c.bold + "║" + c.reset + c.dim + "    基于 ReviewAgent 与 TestAgent 沙箱闭环的代码安全门禁    " + c.reset + c.cyan + c.bold + "║" + c.reset);
-  console.log(c.cyan + c.bold + "╚══════════════════════════════════════════════════════════════╝" + c.reset);
+  console.log("\n" + c.cyan + c.bold + "================================================================" + c.reset);
+  console.log(c.cyan + c.bold + " [FlowDev-AI] Pre-Commit Guard 代码安全门禁" + c.reset);
+  console.log(c.dim + " 基于 ReviewAgent 与 TestAgent 沙箱闭环的代码安全门禁" + c.reset);
+  console.log(c.cyan + c.bold + "================================================================" + c.reset);
 }
 
 function getStagedCodeFiles() {
@@ -84,8 +91,8 @@ function postJson(host, port, endpoint, data) {
         path: endpoint,
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(payload),
+          "Content-Type": "application/json; charset=utf-8",
+          "Content-Length": Buffer.byteLength(payload, "utf-8"),
         },
         timeout: 25000,
       },
@@ -120,7 +127,7 @@ function postJson(host, port, endpoint, data) {
       reject(new Error("请求后端门禁服务超时 (25s)"));
     });
 
-    req.write(payload);
+    req.write(payload, "utf-8");
     req.end();
   });
 }
@@ -190,33 +197,33 @@ async function main() {
   if (stagedFiles.length === 0) {
     if (unstagedFiles.length > 0) {
       console.log(
-        `\n${c.yellow}⚠️  [FlowDev-AI 提示] 检测到工作区有 ${unstagedFiles.length} 个未暂存的代码文件修改:`
+        `\n${c.yellow}[FlowDev-AI 提示] 检测到工作区有 ${unstagedFiles.length} 个未暂存的代码文件修改:`
       );
-      unstagedFiles.forEach((f) => console.log(`   • ${f}`));
+      unstagedFiles.forEach((f) => console.log(`   - ${f}`));
       console.log(
-        `   💡 Git 门禁仅对已执行 ${c.bold}git add${c.reset}${c.yellow} 的暂存区代码进行审查。如需审查请先运行: ${c.bold}git add <文件>${c.reset}\n`
+        `   [提示] Git 门禁仅对已执行 ${c.bold}git add${c.reset}${c.yellow} 的暂存区代码进行审查。如需审查请先运行: ${c.bold}git add <文件>${c.reset}\n`
       );
     } else {
       console.log(
-        `\n${c.dim}ℹ️  [FlowDev-AI] 暂存区无任何 JS/TS/PY 源码文件变更，自动放行提交。${c.reset}\n`
+        `\n${c.dim}[FlowDev-AI] 暂存区无任何 JS/TS/PY 源码文件变更，自动放行提交。${c.reset}\n`
       );
     }
     process.exit(0);
   }
 
   console.log(
-    `\n🔍 检测到暂存区包含 ${c.bold}${stagedFiles.length}${c.reset} 个待提交源码文件 (项目: ${c.cyan}${project_id}${c.reset}, 分支: ${c.magenta}${branch}${c.reset}, 提交人: ${committer}):`
+    `\n[扫描] 检测到暂存区包含 ${c.bold}${stagedFiles.length}${c.reset} 个待提交源码文件 (项目: ${c.cyan}${project_id}${c.reset}, 分支: ${c.magenta}${branch}${c.reset}, 提交人: ${committer}):`
   );
-  stagedFiles.forEach((f) => console.log(`   ${c.dim}•${c.reset} ${f}`));
+  stagedFiles.forEach((f) => console.log(`   - ${f}`));
 
   console.log(
-    `\n⏳ 正在将暂存代码发送至 FlowDev-AI 门禁服务 (http://${API_HOST}:${API_PORT}/api/cli/scan)...`
+    `\n[审查中] 正在将暂存代码发送至 FlowDev-AI 门禁服务 (http://${API_HOST}:${API_PORT}/api/cli/scan)...`
   );
   console.log(
-    `   🤖 ${c.magenta}ReviewAgent${c.reset} 深度语义与安全审查中...`
+    `   [审核] ${c.magenta}ReviewAgent${c.reset} 深度语义与安全审查中...`
   );
   console.log(
-    `   🧪 ${c.blue}TestAgent${c.reset} 自动化单测与沙箱运行中...`
+    `   [验证] ${c.blue}TestAgent${c.reset} 自动化单测与沙箱运行中...`
   );
 
   const filesPayload = stagedFiles.map((file) => ({
@@ -234,7 +241,7 @@ async function main() {
     });
   } catch (err) {
     console.error(
-      `\n${c.yellow}⚠️  [FlowDev-AI 警告] 无法连接到门禁服务 (http://${API_HOST}:${API_PORT})${c.reset}`
+      `\n${c.yellow}[FlowDev-AI 警告] 无法连接到门禁服务 (http://${API_HOST}:${API_PORT})${c.reset}`
     );
     console.error(`   原因: ${err.message}`);
     console.error(
@@ -248,53 +255,53 @@ async function main() {
   }
 
   console.log(
-    "\n────────────────────────────────────────────────────────────────"
+    "\n----------------------------------------------------------------"
   );
 
   if (scanResult.passed) {
     // Passed successfully!
     console.log(
-      `\n${c.green}${c.bold}✔ 代码审查通过，单测自愈验证合格，允许提交！${c.reset}`
+      `\n${c.green}${c.bold}[通过] 代码审查通过，单测自愈验证合格，允许提交！${c.reset}`
     );
     console.log(`${c.dim}  ${scanResult.summary}${c.reset}`);
 
     if (scanResult.suggestions && scanResult.suggestions.length > 0) {
-      console.log(`\n${c.cyan}💡 【优化建议】(非阻断项):${c.reset}`);
+      console.log(`\n${c.cyan}[建议] 优化建议 (非阻断项):${c.reset}`);
       scanResult.suggestions.forEach((sug, i) => {
         console.log(`   ${c.dim}${i + 1}.${c.reset} ${sug}`);
       });
     }
 
     console.log(
-      "\n────────────────────────────────────────────────────────────────\n"
+      "\n----------------------------------------------------------------\n"
     );
     process.exit(0);
   } else {
     // Intercepted!
     console.log(
-      `\n${c.red}${c.bold}✖ 发现严重问题，已拦截 Commit！${c.reset}`
+      `\n${c.red}${c.bold}[拦截] 发现严重问题，已拦截 Commit！${c.reset}`
     );
     console.log(`${c.yellow}${scanResult.summary}${c.reset}\n`);
 
     console.log(
-      `${c.red}${c.bold}🚨 【阻断性致命缺陷 (Critical Issues)】:${c.reset}`
+      `${c.red}${c.bold}[阻断] 阻断性致命缺陷 (Critical Issues):${c.reset}`
     );
     (scanResult.critical_issues || []).forEach((issue, idx) => {
       console.log(`   ${c.red}${c.bold}[${idx + 1}]${c.reset} ${issue}`);
     });
 
     if (scanResult.suggestions && scanResult.suggestions.length > 0) {
-      console.log(`\n${c.cyan}💡 【修复建议 (Suggestions)】:${c.reset}`);
+      console.log(`\n${c.cyan}[建议] 修复建议 (Suggestions):${c.reset}`);
       scanResult.suggestions.forEach((sug, idx) => {
-        console.log(`   ${c.dim}•${c.reset} ${sug}`);
+        console.log(`   ${c.dim}-${c.reset} ${sug}`);
       });
     }
 
     console.log(
-      `\n${c.yellow}👉 请修复上述问题，重新执行 ${c.bold}git add <file>${c.reset}${c.yellow} 后再进行提交。${c.reset}`
+      `\n${c.yellow}[提示] 请修复上述问题，重新执行 ${c.bold}git add <文件>${c.reset}${c.yellow} 后再进行提交。${c.reset}`
     );
     console.log(
-      "────────────────────────────────────────────────────────────────\n"
+      "----------------------------------------------------------------\n"
     );
     process.exit(1);
   }

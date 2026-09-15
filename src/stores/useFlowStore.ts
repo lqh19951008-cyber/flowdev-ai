@@ -23,6 +23,26 @@ import { executeWorkflowStream } from "@/lib/sse";
 import { getPreset } from "@/lib/presets";
 
 const STORAGE_KEY = "flowdev_workflow_v2";
+const READ_EVENTS_STORAGE_KEY = "flowdev_read_events_v1";
+
+const getSavedReadEventIds = (): string[] => {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(READ_EVENTS_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+};
+
+const saveReadEventIds = (ids: string[]) => {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(READ_EVENTS_STORAGE_KEY, JSON.stringify(ids));
+  } catch (e) {
+    console.warn("Failed to persist read events to localStorage", e);
+  }
+};
 
 let persistTimer: NodeJS.Timeout | null = null;
 const debouncedPersist = (nodes: CustomNode[], edges: Edge[]) => {
@@ -70,6 +90,7 @@ interface FlowState {
   projects: ProjectItem[];
   selectedProjectId: string;
   recentEvents: ScanEventItem[];
+  readEventIds: string[];
   unreadEventsCount: number;
   isProjectStatsModalOpen: boolean;
   isLiveFeedOpen: boolean;
@@ -98,6 +119,10 @@ interface FlowState {
   fetchProjects: () => Promise<void>;
   fetchRecentEvents: (projectId?: string) => Promise<void>;
   addLiveEvent: (event: ScanEventItem) => void;
+  markEventAsRead: (id: string) => void;
+  markAllEventsAsRead: () => void;
+  toggleEventRead: (id: string) => void;
+  isEventRead: (id: string) => boolean;
   clearUnreadEventsCount: () => void;
   setProjectStatsModalOpen: (open: boolean) => void;
   setLiveFeedOpen: (open: boolean) => void;
@@ -307,6 +332,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   projects: [],
   selectedProjectId: "all",
   recentEvents: [],
+  readEventIds: [],
   unreadEventsCount: 0,
   isProjectStatsModalOpen: false,
   isLiveFeedOpen: false,
@@ -379,7 +405,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     set({
       nodes: nextNodes,
       selectedNode: node,
-      isDrawerOpen: true,
+      isDrawerOpen: false,
     });
     debouncedPersist(nextNodes, get().edges);
   },
@@ -429,6 +455,9 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   initFromStorage: () => {
     if (typeof window === "undefined") return;
     try {
+      const savedReadIds = getSavedReadEventIds();
+      set({ readEventIds: savedReadIds });
+
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
@@ -566,8 +595,14 @@ export const useFlowStore = create<FlowState>((set, get) => ({
           : `http://127.0.0.1:8000/api/events/recent`;
       const res = await fetch(url);
       if (res.ok) {
-        const data = await res.json();
-        set({ recentEvents: data });
+        const data: ScanEventItem[] = await res.json();
+        const readIds = get().readEventIds.length > 0 ? get().readEventIds : getSavedReadEventIds();
+        const unreadCount = data.filter((e) => !readIds.includes(e.id)).length;
+        set({
+          recentEvents: data,
+          readEventIds: readIds,
+          unreadEventsCount: unreadCount,
+        });
       }
     } catch (e) {
       console.warn("Failed to fetch recent events", e);
@@ -575,17 +610,65 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   },
 
   addLiveEvent: (event: ScanEventItem) => {
-    set((state) => ({
-      recentEvents: [
-        event,
-        ...state.recentEvents.filter((e) => e.id !== event.id),
-      ].slice(0, 50),
-      unreadEventsCount: state.unreadEventsCount + 1,
-    }));
+    const nextEvents = [
+      event,
+      ...get().recentEvents.filter((e) => e.id !== event.id),
+    ].slice(0, 50);
+    const readIds = get().readEventIds;
+    const unreadCount = nextEvents.filter((e) => !readIds.includes(e.id)).length;
+    set({
+      recentEvents: nextEvents,
+      unreadEventsCount: unreadCount,
+    });
     get().fetchProjects();
   },
 
-  clearUnreadEventsCount: () => set({ unreadEventsCount: 0 }),
+  markEventAsRead: (id: string) => {
+    const current = get().readEventIds;
+    if (current.includes(id)) return;
+    const nextReadIds = [...current, id];
+    saveReadEventIds(nextReadIds);
+    const unreadCount = get().recentEvents.filter((e) => !nextReadIds.includes(e.id)).length;
+    set({
+      readEventIds: nextReadIds,
+      unreadEventsCount: unreadCount,
+    });
+  },
+
+  markAllEventsAsRead: () => {
+    const allIds = Array.from(
+      new Set([...get().readEventIds, ...get().recentEvents.map((e) => e.id)])
+    );
+    saveReadEventIds(allIds);
+    set({
+      readEventIds: allIds,
+      unreadEventsCount: 0,
+    });
+  },
+
+  toggleEventRead: (id: string) => {
+    const current = get().readEventIds;
+    let nextReadIds: string[];
+    if (current.includes(id)) {
+      nextReadIds = current.filter((x) => x !== id);
+    } else {
+      nextReadIds = [...current, id];
+    }
+    saveReadEventIds(nextReadIds);
+    const unreadCount = get().recentEvents.filter((e) => !nextReadIds.includes(e.id)).length;
+    set({
+      readEventIds: nextReadIds,
+      unreadEventsCount: unreadCount,
+    });
+  },
+
+  isEventRead: (id: string) => {
+    return get().readEventIds.includes(id);
+  },
+
+  clearUnreadEventsCount: () => {
+    get().markAllEventsAsRead();
+  },
 
   setProjectStatsModalOpen: (open: boolean) =>
     set({ isProjectStatsModalOpen: open }),

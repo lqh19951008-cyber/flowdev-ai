@@ -121,7 +121,7 @@ export function Header() {
   };
 
   return (
-    <header className="h-12 w-full border-b border-slate-200/80 dark:border-slate-800/90 bg-white/90 dark:bg-slate-950/95 px-3 flex items-center justify-between z-20 select-none shrink-0 backdrop-blur transition-colors duration-200">
+    <header className="h-12 w-full border-b border-slate-200/80 dark:border-slate-800/90 bg-white/90 dark:bg-slate-950/95 px-3 flex items-center justify-between z-40 relative select-none shrink-0 backdrop-blur transition-colors duration-200">
       {/* Left: Brand, Mode Switcher & Project Switcher */}
       <div className="flex items-center gap-2 shrink-0">
         {/* Sidebar Toggle (Only relevant in pipeline mode) */}

@@ -95,16 +95,12 @@ const ITEM_THEMES: Record<
 
 export function Sidebar() {
   const { isSidebarOpen, toggleSidebar } = useFlowStore();
-  const [draggedType, setDraggedType] = useState<FlowNodeType | null>(null);
 
   const onDragStart = (event: React.DragEvent, nodeType: FlowNodeType) => {
-    setDraggedType(nodeType);
     event.dataTransfer.setData("application/reactflow", nodeType);
+    event.dataTransfer.setData("text/plain", nodeType);
+    event.dataTransfer.setData("text", nodeType);
     event.dataTransfer.effectAllowed = "move";
-  };
-
-  const onDragEnd = () => {
-    setDraggedType(null);
   };
 
   return (
@@ -170,11 +166,9 @@ export function Sidebar() {
                 key={item.type}
                 draggable
                 onDragStart={(e) => onDragStart(e, item.type)}
-                onDragEnd={onDragEnd}
                 title={`${item.label} (按住拖拽至画布)`}
                 className={cn(
-                  "group relative h-9 w-9 flex items-center justify-center rounded-xl border border-slate-200/90 dark:border-slate-800/80 bg-slate-50/80 dark:bg-slate-900/60 hover:bg-white dark:hover:bg-slate-800 hover:border-blue-400/80 cursor-grab active:cursor-grabbing transition-all duration-150 shadow-xs",
-                  draggedType === item.type && "opacity-40 scale-95 border-blue-500"
+                  "group relative h-9 w-9 flex items-center justify-center rounded-xl border border-slate-200/90 dark:border-slate-800/80 bg-slate-50/80 dark:bg-slate-900/60 hover:bg-white dark:hover:bg-slate-800 hover:border-blue-400/80 cursor-grab active:cursor-grabbing transition-all duration-150 shadow-xs"
                 )}
               >
                 <Icon className={cn("h-4 w-4 transition-transform group-hover:scale-110", theme.iconColor)} />
@@ -208,11 +202,9 @@ export function Sidebar() {
                 key={item.type}
                 draggable
                 onDragStart={(e) => onDragStart(e, item.type)}
-                onDragEnd={onDragEnd}
                 className={cn(
                   "group relative p-3 rounded-2xl border bg-white/80 dark:bg-slate-900/60 hover:bg-white dark:hover:bg-slate-900 border-slate-200/90 dark:border-slate-800/90 cursor-grab active:cursor-grabbing transition-all duration-200 shadow-xs hover:shadow-md select-none",
-                  theme.borderHover,
-                  draggedType === item.type && "opacity-40 scale-[0.98] border-blue-500 shadow-none"
+                  theme.borderHover
                 )}
               >
                 <div className="flex items-center justify-between mb-1.5">

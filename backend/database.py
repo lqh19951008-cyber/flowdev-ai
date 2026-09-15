@@ -4,11 +4,26 @@ import json
 import os
 import sqlite3
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 DB_PATH = Path(__file__).parent / "flowdev.db"
+
+
+def get_utc_now_iso() -> str:
+    """Returns current UTC time in ISO-8601 format with Z timezone indicator."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def normalize_iso_timestamp(ts: Optional[str]) -> Optional[str]:
+    """Ensures timestamp has standard UTC indicator if missing."""
+    if not ts:
+        return ts
+    clean_ts = ts.strip()
+    if clean_ts and not clean_ts.endswith("Z") and "+" not in clean_ts and "-" not in clean_ts[10:]:
+        return f"{clean_ts}Z"
+    return clean_ts
 
 
 def get_connection() -> sqlite3.Connection:
@@ -61,7 +76,7 @@ def init_db() -> None:
         cursor.execute("SELECT COUNT(*) FROM projects")
         count = cursor.fetchone()[0]
         if count == 0:
-            now = datetime.utcnow().isoformat()
+            now = get_utc_now_iso()
             cursor.execute(
                 """
                 INSERT INTO projects (id, name, description, policy_dag_json, created_at, updated_at)
@@ -111,7 +126,7 @@ class DatabaseService:
             if row:
                 return dict(row)
 
-            now = datetime.utcnow().isoformat()
+            now = get_utc_now_iso()
             display_name = name or clean_id
             cursor.execute(
                 """
@@ -165,14 +180,14 @@ class DatabaseService:
                     "total_scans": total,
                     "passed_scans": passed,
                     "pass_rate": pass_rate,
-                    "last_scan_at": row["last_scan_at"],
+                    "last_scan_at": normalize_iso_timestamp(row["last_scan_at"]),
                 })
             return results
 
     @classmethod
     def update_project_policy(cls, project_id: str, policy_dag: Dict[str, Any]) -> bool:
         """Updates the custom DAG review policy for a project."""
-        now = datetime.utcnow().isoformat()
+        now = get_utc_now_iso()
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -204,7 +219,7 @@ class DatabaseService:
         cls.get_or_create_project(project_id)
 
         event_id = str(uuid.uuid4())
-        now = datetime.utcnow().isoformat()
+        now = get_utc_now_iso()
 
         # Sanitize files for storage (truncate huge content)
         stored_files = []
@@ -297,6 +312,6 @@ class DatabaseService:
                     "summary": r["summary"],
                     "files_count": r["files_count"],
                     "files": json.loads(r["files_detail_json"] or "[]"),
-                    "created_at": r["created_at"],
+                    "created_at": normalize_iso_timestamp(r["created_at"]),
                 })
             return events
