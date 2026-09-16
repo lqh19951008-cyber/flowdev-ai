@@ -298,20 +298,24 @@ pnpm dev
 
 ## ⚙️ 模型配置与网络适配
 
-在 `backend/.env` 中配置您的真实大模型中转或直连密钥：
+可以在前端界面点击顶栏 **「系统配置」** 按钮实时配置，或在 `backend/.env` 中配置您的真实大模型与飞书机器人 Webhook：
 
 ```env
-# 接口 Base URL (默认已适配您指定的专用中转网关)
-OPENAI_API_BASE=https://tokenerpgw.asiainfo.com/erp/v1
+# 1. 大模型接口 Base URL (支持 DeepSeek官方、OpenAI官方、通义千问、企业自建中转站等)
+OPENAI_API_BASE=https://api.openai.com/v1
 
-# 真实 API Token (例如 Bearer sk-...)
-OPENAI_API_KEY=sk-your-real-token-here
+# 2. 真实 API Token (例如 sk-...)
+OPENAI_API_KEY=
 
-# 驱动模型 (默认推荐)
-DEFAULT_MODEL=AI/deekseek-v4-flash-0731
+# 3. 驱动模型标识 (例如 deepseek-chat, gpt-4o, qwen-2.5-coder 等)
+DEFAULT_MODEL=deepseek-chat
 
-# 接口调用超时时间 (秒)
+# 4. 接口调用超时时间 (秒)
 REQUEST_TIMEOUT=60
+
+# 5. 飞书群自定义机器人 Webhook 地址
+FEISHU_WEBHOOK_URL=
+FEISHU_NOTIFY_ONLY_BLOCKED=true
 ```
 
 > [!TIP]
@@ -328,15 +332,16 @@ REQUEST_TIMEOUT=60
   {
     "status": "healthy",
     "service": "FlowDev-AI Core",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "dag_engine": "KahnScheduler-v1",
     "llm_config": {
-      "api_base": "https://tokenerpgw.asiainfo.com/erp/v1",
-      "has_api_key": true,
-      "default_model": "AI/deekseek-v4-flash-0731"
+      "api_base": "https://api.openai.com/v1",
+      "has_api_key": false,
+      "default_model": "deepseek-chat"
     }
   }
   ```
+
 
 ### 2. DAG 工作流流式执行接口
 - **路径**：`POST /api/workflow/execute`

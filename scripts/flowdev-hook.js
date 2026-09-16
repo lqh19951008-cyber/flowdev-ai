@@ -14,19 +14,25 @@ const { execSync } = require("child_process");
 const http = require("http");
 const path = require("path");
 
-// ANSI color helpers
+// TTY and Color detection (disable ANSI escape codes in VS Code GUI popup/non-TTY to avoid □[36m garbled characters)
+const isColorSupported = Boolean(
+  process.stdout.isTTY &&
+  !process.env.NO_COLOR &&
+  process.env.TERM !== "dumb"
+);
+
 const c = {
-  reset: "\x1b[0m",
-  bold: "\x1b[1m",
-  dim: "\x1b[2m",
-  red: "\x1b[31m",
-  green: "\x1b[32m",
-  yellow: "\x1b[33m",
-  cyan: "\x1b[36m",
-  blue: "\x1b[34m",
-  magenta: "\x1b[35m",
-  bgRed: "\x1b[41m",
-  bgGreen: "\x1b[42m",
+  reset: isColorSupported ? "\x1b[0m" : "",
+  bold: isColorSupported ? "\x1b[1m" : "",
+  dim: isColorSupported ? "\x1b[2m" : "",
+  red: isColorSupported ? "\x1b[31m" : "",
+  green: isColorSupported ? "\x1b[32m" : "",
+  yellow: isColorSupported ? "\x1b[33m" : "",
+  cyan: isColorSupported ? "\x1b[36m" : "",
+  blue: isColorSupported ? "\x1b[34m" : "",
+  magenta: isColorSupported ? "\x1b[35m" : "",
+  bgRed: isColorSupported ? "\x1b[41m" : "",
+  bgGreen: isColorSupported ? "\x1b[42m" : "",
 };
 
 const API_HOST = process.env.FLOWDEV_HOST || "127.0.0.1";
@@ -41,10 +47,12 @@ if (process.stdout && process.stdout.setEncoding) {
 }
 
 function printBanner() {
-  console.log("\n" + c.cyan + c.bold + "================================================================" + c.reset);
-  console.log(c.cyan + c.bold + " [FlowDev-AI] Pre-Commit Guard 代码安全门禁" + c.reset);
-  console.log(c.dim + " 基于 ReviewAgent 与 TestAgent 沙箱闭环的代码安全门禁" + c.reset);
-  console.log(c.cyan + c.bold + "================================================================" + c.reset);
+  if (isColorSupported) {
+    console.log("\n" + c.cyan + c.bold + "================================================================" + c.reset);
+    console.log(c.cyan + c.bold + " [FlowDev-AI] Pre-Commit Guard 代码安全门禁" + c.reset);
+    console.log(c.dim + " 基于 ReviewAgent 与 TestAgent 沙箱闭环的代码安全门禁" + c.reset);
+    console.log(c.cyan + c.bold + "================================================================" + c.reset);
+  }
 }
 
 function getStagedCodeFiles() {
@@ -223,9 +231,11 @@ async function main() {
   if (scanResult.passed) {
     // Passed successfully!
     console.log(
-      `\n${c.green}${c.bold}[通过] 代码审查通过，单测自愈验证合格，允许提交！${c.reset}`
+      `[FlowDev 门禁通过] 代码审查合格，单测自愈验证通过，允许提交！`
     );
-    console.log(`${c.dim}  ${scanResult.summary}${c.reset}`);
+    if (isColorSupported) {
+      console.log(`${c.dim}  ${scanResult.summary}${c.reset}`);
+    }
 
     if (scanResult.suggestions && scanResult.suggestions.length > 0) {
       console.log(`\n${c.cyan}[建议] 优化建议 (非阻断项):${c.reset}`);
@@ -234,36 +244,40 @@ async function main() {
       });
     }
 
-    console.log(
-      "\n----------------------------------------------------------------\n"
-    );
+    if (isColorSupported) {
+      console.log(
+        "\n----------------------------------------------------------------\n"
+      );
+    }
     process.exit(0);
   } else {
     // Intercepted!
-    console.log(
-      `\n${c.red}${c.bold}[拦截] 发现严重问题，已拦截 Commit！${c.reset}`
+    const issues = scanResult.critical_issues || [];
+    const issueCount = issues.length;
+
+    // First line is critical for VS Code popup toast: Keep it concise, clear, without escape codes
+    console.error(
+      `[FlowDev 门禁拦截] 发现 ${issueCount} 项阻断性风险，已阻止 Commit！`
     );
-    console.log(`${c.yellow}${scanResult.summary}${c.reset}\n`);
+
+    console.log(`\n原因概述: ${scanResult.summary}\n`);
 
     console.log(
-      `${c.red}${c.bold}[阻断] 阻断性致命缺陷 (Critical Issues):${c.reset}`
+      `${c.red}${c.bold}【阻断性致命缺陷 (Critical Issues)】:${c.reset}`
     );
-    (scanResult.critical_issues || []).forEach((issue, idx) => {
-      console.log(`   ${c.red}${c.bold}[${idx + 1}]${c.reset} ${issue}`);
+    issues.forEach((issue, idx) => {
+      console.log(`  [${idx + 1}] ${issue}`);
     });
 
     if (scanResult.suggestions && scanResult.suggestions.length > 0) {
-      console.log(`\n${c.cyan}[建议] 修复建议 (Suggestions):${c.reset}`);
+      console.log(`\n${c.cyan}【修复建议 (Suggestions)】:${c.reset}`);
       scanResult.suggestions.forEach((sug, idx) => {
-        console.log(`   ${c.dim}-${c.reset} ${sug}`);
+        console.log(`  - ${sug}`);
       });
     }
 
     console.log(
-      `\n${c.yellow}[提示] 请修复上述问题，重新执行 ${c.bold}git add <文件>${c.reset}${c.yellow} 后再进行提交。${c.reset}`
-    );
-    console.log(
-      "----------------------------------------------------------------\n"
+      `\n${c.yellow}[操作提示] 请根据上述建议修复代码，重新执行 git add 后再尝试提交。${c.reset}\n`
     );
     process.exit(1);
   }

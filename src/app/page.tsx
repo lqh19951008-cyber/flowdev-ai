@@ -8,7 +8,9 @@ import { PropertyDrawer } from "@/components/layout/PropertyDrawer";
 import { StatusBar } from "@/components/layout/StatusBar";
 import { TopologyModal } from "@/components/modal/TopologyModal";
 import { DiffModal } from "@/components/modal/DiffModal";
+import { SystemSettingsModal } from "@/components/modal/FeishuConfigModal";
 import { LiveGuardFeed } from "@/components/dashboard/LiveGuardFeed";
+
 import { ProjectStatsModal } from "@/components/dashboard/ProjectStatsModal";
 import { QualityDashboardView } from "@/components/dashboard/QualityDashboardView";
 import { useFlowStore } from "@/stores/useFlowStore";
@@ -74,6 +76,10 @@ export default function Home() {
 
       {/* Monaco 双向 Diff 比对与成果导出模态框 */}
       <DiffModal />
+
+      {/* 系统大模型与飞书 Webhook 全局配置模态框 */}
+      <SystemSettingsModal />
     </main>
   );
 }
+

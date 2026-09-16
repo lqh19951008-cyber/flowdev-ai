@@ -22,12 +22,15 @@ import {
   RefreshCw,
   Sun,
   Moon,
+  Settings as SettingsIcon,
 } from "lucide-react";
 import { useFlowStore } from "@/stores/useFlowStore";
 import { useTheme } from "@/components/providers/HeroUIProvider";
 import { WORKFLOW_PRESETS } from "@/lib/presets";
 import { PresetId } from "@/types/flow";
 import { cn } from "@/lib/utils";
+
+
 
 export function Header() {
   const {
@@ -55,6 +58,7 @@ export function Header() {
     fetchRecentEvents,
     activeViewMode,
     setActiveViewMode,
+    setSettingsModalOpen,
   } = useFlowStore();
   const { theme, toggleTheme } = useTheme();
 
@@ -63,6 +67,7 @@ export function Header() {
   const [isPolicySaved, setIsPolicySaved] = useState(false);
   const [isSavingPolicy, setIsSavingPolicy] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+
 
   const presetMenuRef = useRef<HTMLDivElement>(null);
   const projectMenuRef = useRef<HTMLDivElement>(null);
@@ -196,7 +201,9 @@ export function Header() {
           >
             <FolderGit2 className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400 shrink-0" />
             <span className="font-mono max-w-[130px] truncate">
-              {selectedProjectId === "all" ? "全部项目" : selectedProjectId}
+              {activeViewMode === "pipeline"
+                ? (selectedProjectId === "all" ? (projects[0]?.id || "rxjs") : selectedProjectId)
+                : (selectedProjectId === "all" ? "全部项目" : selectedProjectId)}
             </span>
             <ChevronDown className="h-3 w-3 text-slate-400 shrink-0" />
           </button>
@@ -204,26 +211,28 @@ export function Header() {
           {isProjectMenuOpen && (
             <div className="absolute left-0 mt-1.5 w-64 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950/95 shadow-2xl p-1.5 z-50 backdrop-blur animate-in fade-in zoom-in-95 duration-100">
               <div className="px-2 py-1 text-[10px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
-                选择接入的项目仓库
+                {activeViewMode === "pipeline" ? "切换编排目标仓库" : "选择监控项目仓库"}
               </div>
               <div className="space-y-1 mt-1">
-                <button
-                  onClick={() => {
-                    setSelectedProjectId("all");
-                    setIsProjectMenuOpen(false);
-                  }}
-                  className={cn(
-                    "w-full text-left px-2.5 py-1.5 rounded-lg flex items-center justify-between text-xs transition-colors",
-                    selectedProjectId === "all"
-                      ? "bg-cyan-500/15 text-cyan-700 dark:text-cyan-300 font-medium"
-                      : "text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-900"
-                  )}
-                >
-                  <span>全部项目 (全局监控)</span>
-                  {selectedProjectId === "all" && (
-                    <Check className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400" />
-                  )}
-                </button>
+                {activeViewMode === "dashboard" && (
+                  <button
+                    onClick={() => {
+                      setSelectedProjectId("all");
+                      setIsProjectMenuOpen(false);
+                    }}
+                    className={cn(
+                      "w-full text-left px-2.5 py-1.5 rounded-lg flex items-center justify-between text-xs transition-colors",
+                      selectedProjectId === "all"
+                        ? "bg-cyan-500/15 text-cyan-700 dark:text-cyan-300 font-medium"
+                        : "text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-900"
+                    )}
+                  >
+                    <span>全部项目 (全局监控)</span>
+                    {selectedProjectId === "all" && (
+                      <Check className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400" />
+                    )}
+                  </button>
+                )}
                 {projects.map((proj) => {
                   const isCur = selectedProjectId === proj.id;
                   return (
@@ -297,6 +306,16 @@ export function Header() {
             )}
           </button>
 
+          {/* System Settings Button (LLM API & Feishu) */}
+          <button
+            onClick={() => setSettingsModalOpen(true, "llm")}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-900 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
+            title="配置 AI 大模型 API Key / Base URL 与飞书群机器人 Webhook"
+          >
+            <SettingsIcon className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400 shrink-0" />
+            <span>系统配置</span>
+          </button>
+
           {/* Refresh Data */}
           <button
             onClick={handleRefresh}
@@ -351,6 +370,16 @@ export function Header() {
                 <span className="hidden sm:inline">深色</span>
               </>
             )}
+          </button>
+
+          {/* System Settings Button (LLM API & Feishu) */}
+          <button
+            onClick={() => setSettingsModalOpen(true, "llm")}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-900 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
+            title="配置 AI 大模型 API Key / Base URL 与飞书群机器人 Webhook"
+          >
+            <SettingsIcon className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400 shrink-0" />
+            <span>配置</span>
           </button>
 
           {/* Save Policy to Project Button */}
@@ -527,3 +556,5 @@ export function Header() {
     </header>
   );
 }
+
+

@@ -22,8 +22,9 @@ import {
 import { executeWorkflowStream } from "@/lib/sse";
 import { getPreset } from "@/lib/presets";
 
-const STORAGE_KEY = "flowdev_workflow_v2";
 const READ_EVENTS_STORAGE_KEY = "flowdev_read_events_v1";
+const getProjectStorageKey = (projectId: string) =>
+  `flowdev_workflow_project_${projectId || "rxjs"}`;
 
 const getSavedReadEventIds = (): string[] => {
   if (typeof window === "undefined") return [];
@@ -45,13 +46,18 @@ const saveReadEventIds = (ids: string[]) => {
 };
 
 let persistTimer: NodeJS.Timeout | null = null;
-const debouncedPersist = (nodes: CustomNode[], edges: Edge[]) => {
+const debouncedPersist = (
+  nodes: CustomNode[],
+  edges: Edge[],
+  projectId: string = "rxjs"
+) => {
   if (typeof window === "undefined") return;
   if (persistTimer) clearTimeout(persistTimer);
+  const targetKey = getProjectStorageKey(projectId === "all" ? "rxjs" : projectId);
   persistTimer = setTimeout(() => {
     try {
       localStorage.setItem(
-        STORAGE_KEY,
+        targetKey,
         JSON.stringify({
           nodes,
           edges,
@@ -75,6 +81,9 @@ interface FlowState {
   isDrawerOpen: boolean;
   isSidebarOpen: boolean;
   isTopologyModalOpen: boolean;
+  isSettingsModalOpen: boolean;
+  settingsModalTab: "llm" | "feishu";
+
 
   // Execution State
   isExecuting: boolean;
@@ -106,7 +115,9 @@ interface FlowState {
   toggleSidebar: (open?: boolean) => void;
   setTopologyModalOpen: (open: boolean) => void;
   setDiffModalOpen: (open: boolean) => void;
+  setSettingsModalOpen: (open: boolean, tab?: "llm" | "feishu") => void;
   setArtifacts: (data: Partial<ExecutionArtifacts>) => void;
+
   loadPreset: (presetId: PresetId) => void;
   initFromStorage: () => void;
   setNodes: (nodes: CustomNode[]) => void;
@@ -315,6 +326,9 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   isDrawerOpen: false,
   isSidebarOpen: true,
   isTopologyModalOpen: false,
+  isSettingsModalOpen: false,
+  settingsModalTab: "llm",
+
 
   isExecuting: false,
   nodeLogs: {},
@@ -326,11 +340,17 @@ export const useFlowStore = create<FlowState>((set, get) => ({
 
   // Main Navigation View: "dashboard" vs "pipeline"
   activeViewMode: "pipeline",
-  setActiveViewMode: (mode: ActiveViewMode) => set({ activeViewMode: mode }),
+  setActiveViewMode: (mode: ActiveViewMode) => {
+    set({ activeViewMode: mode });
+    if (mode === "pipeline" && get().selectedProjectId === "all") {
+      const firstProj = get().projects[0]?.id || "rxjs";
+      get().setSelectedProjectId(firstProj);
+    }
+  },
 
   // Multi-Tenant & Live Guard State
   projects: [],
-  selectedProjectId: "all",
+  selectedProjectId: "rxjs",
   recentEvents: [],
   readEventIds: [],
   unreadEventsCount: 0,
@@ -340,13 +360,13 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   onNodesChange: (changes) => {
     const nextNodes = applyNodeChanges(changes, get().nodes);
     set({ nodes: nextNodes });
-    debouncedPersist(nextNodes, get().edges);
+    debouncedPersist(nextNodes, get().edges, get().selectedProjectId);
   },
 
   onEdgesChange: (changes) => {
     const nextEdges = applyEdgeChanges(changes, get().edges);
     set({ edges: nextEdges });
-    debouncedPersist(get().nodes, nextEdges);
+    debouncedPersist(get().nodes, nextEdges, get().selectedProjectId);
   },
 
   onConnect: (connection) => {
@@ -365,7 +385,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       get().edges
     );
     set({ edges: nextEdges });
-    debouncedPersist(get().nodes, nextEdges);
+    debouncedPersist(get().nodes, nextEdges, get().selectedProjectId);
   },
 
   setSelectedNode: (node) => {
@@ -397,7 +417,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     });
 
     set({ nodes: nextNodes });
-    debouncedPersist(nextNodes, get().edges);
+    debouncedPersist(nextNodes, get().edges, get().selectedProjectId);
   },
 
   addNode: (node) => {
@@ -407,7 +427,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       selectedNode: node,
       isDrawerOpen: false,
     });
-    debouncedPersist(nextNodes, get().edges);
+    debouncedPersist(nextNodes, get().edges, get().selectedProjectId);
   },
 
   toggleDrawer: (open) => {
@@ -430,6 +450,13 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     set({ isDiffModalOpen: open });
   },
 
+  setSettingsModalOpen: (open, tab) => {
+    set((state) => ({
+      isSettingsModalOpen: open,
+      settingsModalTab: tab !== undefined ? tab : state.settingsModalTab,
+    }));
+  },
+
   setArtifacts: (data) => {
     set({
       artifacts: {
@@ -449,7 +476,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       nodeLogs: {},
       isExecuting: false,
     });
-    debouncedPersist(preset.nodes, preset.edges);
+    debouncedPersist(preset.nodes, preset.edges, get().selectedProjectId);
   },
 
   initFromStorage: () => {
@@ -458,7 +485,8 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       const savedReadIds = getSavedReadEventIds();
       set({ readEventIds: savedReadIds });
 
-      const saved = localStorage.getItem(STORAGE_KEY);
+      const currentProjId = get().selectedProjectId === "all" ? "rxjs" : get().selectedProjectId;
+      const saved = localStorage.getItem(getProjectStorageKey(currentProjId));
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed.nodes) && Array.isArray(parsed.edges) && parsed.nodes.length > 0) {
@@ -498,12 +526,12 @@ export const useFlowStore = create<FlowState>((set, get) => ({
 
   setNodes: (nodes) => {
     set({ nodes });
-    debouncedPersist(nodes, get().edges);
+    debouncedPersist(nodes, get().edges, get().selectedProjectId);
   },
 
   setEdges: (edges) => {
     set({ edges });
-    debouncedPersist(get().nodes, edges);
+    debouncedPersist(get().nodes, edges, get().selectedProjectId);
   },
 
   clearCanvas: () => {
@@ -515,7 +543,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       workflowError: null,
       isExecuting: false,
     });
-    debouncedPersist([], []);
+    debouncedPersist([], [], get().selectedProjectId);
   },
 
   // Multi-Tenant Actions
@@ -523,8 +551,30 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     set({ selectedProjectId: id });
     get().fetchRecentEvents(id === "all" ? undefined : id);
 
-    if (id !== "all") {
-      const proj = get().projects.find((p) => p.id === id);
+    const targetProjId = id === "all" ? "rxjs" : id;
+    let loadedFromLocal = false;
+
+    if (typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem(getProjectStorageKey(targetProjId));
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed.nodes) && Array.isArray(parsed.edges) && parsed.nodes.length > 0) {
+            set({
+              nodes: parsed.nodes,
+              edges: parsed.edges,
+              selectedNode: null,
+            });
+            loadedFromLocal = true;
+          }
+        }
+      } catch (e) {
+        console.warn("Failed to restore project draft from localStorage", e);
+      }
+    }
+
+    if (!loadedFromLocal) {
+      const proj = get().projects.find((p) => p.id === targetProjId);
       if (
         proj &&
         proj.policy &&
@@ -568,6 +618,18 @@ export const useFlowStore = create<FlowState>((set, get) => ({
         set({
           nodes: normalizedNodes,
           edges: normalizedEdges,
+          selectedNode: null,
+        });
+      } else {
+        const presetId =
+          (proj?.policy as any)?.preset ||
+          (targetProjId === "flowdev-ai" ? "security_audit" : "full_review_heal");
+        const preset = getPreset(presetId as PresetId);
+        set({
+          nodes: preset.nodes,
+          edges: preset.edges,
+          selectedNode: null,
+          activePresetId: presetId as PresetId,
         });
       }
     }
@@ -677,6 +739,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
 
   saveCurrentPolicyToProject: async (projectId: string) => {
     try {
+      const targetProjId = projectId === "all" ? "rxjs" : projectId;
       const policyPayload = {
         preset: get().activePresetId,
         updated_at: new Date().toISOString(),
@@ -698,7 +761,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       };
 
       const res = await fetch(
-        `http://127.0.0.1:8000/api/projects/${encodeURIComponent(projectId)}/policy`,
+        `http://127.0.0.1:8000/api/projects/${encodeURIComponent(targetProjId)}/policy`,
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -707,6 +770,16 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       );
 
       if (res.ok) {
+        if (typeof window !== "undefined") {
+          localStorage.setItem(
+            getProjectStorageKey(targetProjId),
+            JSON.stringify({
+              nodes: get().nodes,
+              edges: get().edges,
+              timestamp: Date.now(),
+            })
+          );
+        }
         await get().fetchProjects();
         return true;
       }

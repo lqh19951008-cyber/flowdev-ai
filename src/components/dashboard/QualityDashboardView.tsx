@@ -21,10 +21,12 @@ import {
   Mail,
   MailOpen,
   Eye,
+  Bot,
 } from "lucide-react";
 import { Chip } from "@heroui/react";
 import { useFlowStore } from "@/stores/useFlowStore";
 import { cn, formatTime, formatRelativeTime, formatDate } from "@/lib/utils";
+
 
 export function QualityDashboardView() {
   const {
@@ -41,12 +43,14 @@ export function QualityDashboardView() {
     fetchProjects,
     fetchRecentEvents,
     setActiveViewMode,
+    setSettingsModalOpen,
   } = useFlowStore();
 
   const [filterPassed, setFilterPassed] = useState<string>("all");
   const [searchKeyword, setSearchKeyword] = useState<string>("");
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+
 
   useEffect(() => {
     fetchProjects();
@@ -119,6 +123,16 @@ export function QualityDashboardView() {
             <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
             <span>Git Hook 探针全域守护中</span>
           </div>
+
+          <button
+            onClick={() => setSettingsModalOpen(true, "feishu")}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors shadow-sm"
+            title="配置飞书群机器人 Webhook 实时拦截通知"
+          >
+            <Bot className="h-3.5 w-3.5 text-blue-500" />
+            <span>飞书通知</span>
+          </button>
+
 
           <button
             onClick={handleRefresh}
@@ -615,3 +629,4 @@ export function QualityDashboardView() {
     </div>
   );
 }
+

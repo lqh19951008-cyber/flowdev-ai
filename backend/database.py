@@ -185,6 +185,16 @@ class DatabaseService:
             return results
 
     @classmethod
+    def get_project_policy(cls, project_id: str) -> Dict[str, Any]:
+        """Fetches the parsed policy DAG dictionary for a project."""
+        project = cls.get_or_create_project(project_id)
+        raw_json = project.get("policy_dag_json") or "{}"
+        try:
+            return json.loads(raw_json)
+        except Exception:
+            return {}
+
+    @classmethod
     def update_project_policy(cls, project_id: str, policy_dag: Dict[str, Any]) -> bool:
         """Updates the custom DAG review policy for a project."""
         now = get_utc_now_iso()

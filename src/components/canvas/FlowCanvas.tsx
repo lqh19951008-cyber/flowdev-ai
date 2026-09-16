@@ -28,6 +28,11 @@ import {
   RotateCcw,
   PlusCircle,
   TestTube2,
+  FolderGit2,
+  Save,
+  CheckCircle2,
+  Loader2,
+  ChevronDown,
 } from "lucide-react";
 
 import { useFlowStore, createDefaultNodeData } from "@/stores/useFlowStore";
@@ -62,9 +67,16 @@ function FlowCanvasInner({ showMiniMap = true }: { showMiniMap?: boolean }) {
     setTopologyModalOpen,
     setNodeStatus,
     appendNodeLog,
+    projects,
+    selectedProjectId,
+    setSelectedProjectId,
+    saveCurrentPolicyToProject,
   } = useFlowStore();
 
   const [isGuideOpen, setIsGuideOpen] = useState(false);
+  const [isSavingPolicy, setIsSavingPolicy] = useState(false);
+  const [isPolicySaved, setIsPolicySaved] = useState(false);
+  const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
 
   // Right-click context menu states
   const [nodeContextMenu, setNodeContextMenu] = useState<{
@@ -370,30 +382,114 @@ function FlowCanvasInner({ showMiniMap = true }: { showMiniMap?: boolean }) {
         )}
       </ReactFlow>
 
-      {/* Top Floating Pipeline Flow Breadcrumb & Guide Button */}
-      <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 hidden sm:flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/90 dark:bg-slate-950/85 border border-slate-200/90 dark:border-slate-800/90 shadow-md dark:shadow-2xl backdrop-blur-md text-xs text-slate-700 dark:text-slate-300 select-none pointer-events-auto">
-        <div className="flex items-center gap-1.5 font-medium text-amber-600 dark:text-amber-400">
-          <FileCode2 className="h-3.5 w-3.5 shrink-0" />
-          <span>触发范围</span>
+      {/* Top Floating Project Policy Bar & Breadcrumb */}
+      <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-white/95 dark:bg-slate-950/90 border border-slate-200/90 dark:border-slate-800/90 shadow-lg dark:shadow-2xl backdrop-blur-md text-xs text-slate-700 dark:text-slate-300 select-none pointer-events-auto whitespace-nowrap shrink-0">
+        {/* Project Selector Badge */}
+        <div className="relative shrink-0">
+          <button
+            onClick={() => setIsProjectDropdownOpen(!isProjectDropdownOpen)}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 dark:bg-blue-500/20 border border-blue-500/30 text-blue-700 dark:text-blue-300 font-mono font-medium hover:bg-blue-500/20 transition-colors whitespace-nowrap shrink-0"
+            title="点击切换正在编排门禁规则的代码仓库"
+          >
+            <FolderGit2 className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400 shrink-0" />
+            <span className="font-semibold whitespace-nowrap">{selectedProjectId === "all" ? "rxjs (默认)" : selectedProjectId}</span>
+            <ChevronDown className="h-3 w-3 opacity-60 shrink-0" />
+          </button>
+
+          {isProjectDropdownOpen && (
+            <div className="absolute left-0 mt-2 w-56 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 shadow-2xl p-1 z-50 animate-in fade-in zoom-in-95 duration-100">
+              <div className="px-2 py-1 text-[10px] font-semibold text-slate-400 uppercase whitespace-nowrap">
+                切换编排目标仓库
+              </div>
+              {projects.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => {
+                    setSelectedProjectId(p.id);
+                    setIsProjectDropdownOpen(false);
+                  }}
+                  className={cn(
+                    "w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-mono flex items-center justify-between transition-colors whitespace-nowrap",
+                    (selectedProjectId === p.id || (selectedProjectId === "all" && p.id === "rxjs"))
+                      ? "bg-blue-500/15 text-blue-700 dark:text-blue-300 font-bold"
+                      : "text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-900"
+                  )}
+                >
+                  <span className="truncate">{p.id}</span>
+                  <span className="text-[10px] text-slate-400 font-sans ml-2 truncate">{p.name}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-        <span className="text-slate-400 dark:text-slate-600 font-mono">➔</span>
-        <div className="flex items-center gap-1.5 font-medium text-purple-600 dark:text-purple-400">
-          <Sparkles className="h-3.5 w-3.5 shrink-0" />
-          <span>安全审查与单测 (并联)</span>
+
+        {/* Pipeline Step Flow Indicators */}
+        <div className="hidden md:flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400 whitespace-nowrap shrink-0">
+          <span className="font-mono text-slate-300 dark:text-slate-700">|</span>
+          <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400 font-medium whitespace-nowrap">
+            <FileCode2 className="h-3.5 w-3.5 shrink-0" />
+            <span className="whitespace-nowrap">范围</span>
+          </span>
+          <span className="text-slate-400">➔</span>
+          <span className="flex items-center gap-1 text-purple-600 dark:text-purple-400 font-medium whitespace-nowrap">
+            <Sparkles className="h-3.5 w-3.5 shrink-0" />
+            <span className="whitespace-nowrap">安全审查</span>
+          </span>
+          <span className="text-slate-400">➔</span>
+          <span className="flex items-center gap-1 text-cyan-600 dark:text-cyan-400 font-medium whitespace-nowrap">
+            <GitCompare className="h-3.5 w-3.5 shrink-0" />
+            <span className="whitespace-nowrap">卡点决策</span>
+          </span>
         </div>
-        <span className="text-slate-400 dark:text-slate-600 font-mono">➔</span>
-        <div className="flex items-center gap-1.5 font-medium text-cyan-600 dark:text-cyan-400">
-          <GitCompare className="h-3.5 w-3.5 shrink-0" />
-          <span>门禁决策阻断</span>
-        </div>
-        <div className="h-3 w-px bg-slate-200 dark:bg-slate-800 mx-1" />
+
+        <div className="h-3.5 w-px bg-slate-200 dark:bg-slate-800 mx-0.5 shrink-0" />
+
+        {/* 1-Click Deploy Policy to Current Project */}
+        <button
+          onClick={async () => {
+            const target = selectedProjectId === "all" ? "rxjs" : selectedProjectId;
+            setIsSavingPolicy(true);
+            const ok = await saveCurrentPolicyToProject(target);
+            setIsSavingPolicy(false);
+            if (ok) {
+              setIsPolicySaved(true);
+              setTimeout(() => setIsPolicySaved(false), 2500);
+            }
+          }}
+          disabled={isSavingPolicy}
+          className={cn(
+            "flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all shadow-sm whitespace-nowrap shrink-0",
+            isPolicySaved
+              ? "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40"
+              : "bg-blue-600 text-white hover:bg-blue-700 active:scale-95"
+          )}
+          title="将当前画布的算子与门禁规则立即下发并绑定到当前仓库"
+        >
+          {isPolicySaved ? (
+            <>
+              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span className="whitespace-nowrap">已绑定生效</span>
+            </>
+          ) : isSavingPolicy ? (
+            <>
+              <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+              <span className="whitespace-nowrap">下发中...</span>
+            </>
+          ) : (
+            <>
+              <Save className="h-3.5 w-3.5 shrink-0" />
+              <span className="whitespace-nowrap">下发策略到此项目</span>
+            </>
+          )}
+        </button>
+
         <button
           onClick={() => setIsGuideOpen(true)}
-          className="flex items-center gap-1 text-[11px] text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 font-medium transition-colors cursor-pointer"
+          className="flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 transition-colors cursor-pointer pl-1 whitespace-nowrap shrink-0"
           title="查看门禁编排与使用说明"
         >
           <HelpCircle className="h-3.5 w-3.5 shrink-0" />
-          <span>编排使用指南</span>
+          <span className="whitespace-nowrap">指南</span>
         </button>
       </div>
 

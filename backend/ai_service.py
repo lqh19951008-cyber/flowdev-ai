@@ -28,11 +28,15 @@ class LLMService:
         use_model = model or settings.DEFAULT_MODEL
 
         if settings.has_api_key:
-            endpoint = f"{settings.OPENAI_API_BASE}/chat/completions"
+            auth_token = settings.OPENAI_API_KEY.strip()
+            auth_header = auth_token if auth_token.lower().startswith("bearer ") else f"Bearer {auth_token}"
+            base_url = settings.OPENAI_API_BASE.rstrip("/")
+            endpoint = f"{base_url}/chat/completions"
             headers = {
-                "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
+                "Authorization": auth_header,
                 "Content-Type": "application/json",
             }
+
             body = {
                 "model": use_model,
                 "messages": messages,

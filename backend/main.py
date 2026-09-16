@@ -171,7 +171,185 @@ async def stream_events():
 
 
 
+@app.get("/api/feishu/status")
+async def get_feishu_status():
+    """Returns the current Feishu bot webhook configuration status."""
+    return {
+        "configured": settings.has_feishu,
+        "webhook_url": settings.FEISHU_WEBHOOK_URL,
+        "notify_only_blocked": settings.FEISHU_NOTIFY_ONLY_BLOCKED,
+    }
+
+
+@app.post("/api/feishu/test")
+async def test_feishu_notification(payload: dict = None):
+    """Sends a sample verification card to the Feishu webhook."""
+    from feishu_notifier import FeishuNotifier
+    url = payload.get("webhook_url") if payload else None
+    return await FeishuNotifier.send_test_card(webhook_url=url)
+
+
+@app.post("/api/feishu/config")
+async def update_feishu_config(payload: dict):
+    """Updates the Feishu webhook configuration."""
+    from config import save_env_updates
+    webhook_url = payload.get("webhook_url", "").strip()
+    notify_only_blocked = payload.get("notify_only_blocked", True)
+
+    settings.FEISHU_WEBHOOK_URL = webhook_url
+    settings.FEISHU_NOTIFY_ONLY_BLOCKED = notify_only_blocked
+
+    save_env_updates({
+        "FEISHU_WEBHOOK_URL": webhook_url,
+        "FEISHU_NOTIFY_ONLY_BLOCKED": "true" if notify_only_blocked else "false",
+    })
+
+    return {
+        "success": True,
+        "configured": settings.has_feishu,
+        "webhook_url": settings.FEISHU_WEBHOOK_URL,
+        "notify_only_blocked": settings.FEISHU_NOTIFY_ONLY_BLOCKED,
+    }
+
+
+@app.get("/api/llm/status")
+async def get_llm_status():
+    """Returns the current LLM API configuration status."""
+    masked_key = ""
+    if settings.OPENAI_API_KEY:
+        if len(settings.OPENAI_API_KEY) > 8:
+            masked_key = f"{settings.OPENAI_API_KEY[:4]}...{settings.OPENAI_API_KEY[-4:]}"
+        else:
+            masked_key = "********"
+    return {
+        "configured": settings.has_api_key,
+        "api_base": settings.OPENAI_API_BASE,
+        "default_model": settings.DEFAULT_MODEL,
+        "masked_key": masked_key,
+        "has_api_key": settings.has_api_key,
+        "request_timeout": settings.REQUEST_TIMEOUT,
+    }
+
+
+@app.post("/api/llm/test")
+async def test_llm_connection(payload: dict = None):
+    """Tests the LLM connection with given or current settings."""
+    import httpx
+    payload = payload or {}
+    api_key = payload.get("api_key", "").strip()
+    # If not provided or masked placeholder, use current key
+    if not api_key or "..." in api_key:
+        api_key = settings.OPENAI_API_KEY
+    api_base = (payload.get("api_base", "").strip() or settings.OPENAI_API_BASE).rstrip("/")
+    model = payload.get("model", "").strip() or payload.get("default_model", "").strip() or settings.DEFAULT_MODEL
+
+    if not api_key:
+        return {
+            "success": False,
+            "message": "请先配置 API Key 再进行连通性测试！",
+            "model": model,
+        }
+
+    auth_token = api_key.strip()
+    auth_header = auth_token if auth_token.lower().startswith("bearer ") else f"Bearer {auth_token}"
+    endpoint = f"{api_base}/chat/completions"
+    headers = {
+        "Authorization": auth_header,
+        "Content-Type": "application/json",
+    }
+    test_body = {
+        "model": model,
+        "messages": [{"role": "user", "content": "Hi, reply with 'pong'"}],
+        "max_tokens": 10,
+        "temperature": 0.1,
+    }
+
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(endpoint, headers=headers, json=test_body)
+            if resp.status_code == 200:
+                data = resp.json()
+                reply = ""
+                choices = data.get("choices", [])
+                if choices:
+                    reply = choices[0].get("message", {}).get("content", "").strip()
+                return {
+                    "success": True,
+                    "message": f"连接成功！模型响应: {reply or 'pong'}",
+                    "model": model,
+                    "status_code": resp.status_code,
+                }
+            else:
+                err_text = resp.text[:200]
+                return {
+                    "success": False,
+                    "message": f"连接失败 (HTTP {resp.status_code}): {err_text}",
+                    "model": model,
+                    "status_code": resp.status_code,
+                }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"请求异常: {str(e)}",
+            "model": model,
+        }
+
+
+@app.post("/api/llm/config")
+async def update_llm_config(payload: dict):
+    """Updates the LLM configuration."""
+    from config import save_env_updates
+    updates = {}
+
+    if "api_base" in payload and payload["api_base"]:
+        settings.OPENAI_API_BASE = payload["api_base"].strip().rstrip("/")
+        updates["OPENAI_API_BASE"] = settings.OPENAI_API_BASE
+
+    if "api_key" in payload:
+        new_key = payload["api_key"].strip()
+        # Avoid saving masked preview string like sk-12...4567
+        if new_key and not ("..." in new_key and len(new_key) < 15):
+            settings.OPENAI_API_KEY = new_key
+            updates["OPENAI_API_KEY"] = settings.OPENAI_API_KEY
+        elif new_key == "":
+            settings.OPENAI_API_KEY = ""
+            updates["OPENAI_API_KEY"] = ""
+
+    if "default_model" in payload and payload["default_model"]:
+        settings.DEFAULT_MODEL = payload["default_model"].strip()
+        updates["DEFAULT_MODEL"] = settings.DEFAULT_MODEL
+
+    if "request_timeout" in payload:
+        try:
+            settings.REQUEST_TIMEOUT = float(payload["request_timeout"])
+            updates["REQUEST_TIMEOUT"] = str(settings.REQUEST_TIMEOUT)
+        except ValueError:
+            pass
+
+    if updates:
+        save_env_updates(updates)
+
+    masked_key = ""
+    if settings.OPENAI_API_KEY:
+        if len(settings.OPENAI_API_KEY) > 8:
+            masked_key = f"{settings.OPENAI_API_KEY[:4]}...{settings.OPENAI_API_KEY[-4:]}"
+        else:
+            masked_key = "********"
+
+    return {
+        "success": True,
+        "configured": settings.has_api_key,
+        "api_base": settings.OPENAI_API_BASE,
+        "default_model": settings.DEFAULT_MODEL,
+        "masked_key": masked_key,
+        "has_api_key": settings.has_api_key,
+        "request_timeout": settings.REQUEST_TIMEOUT,
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+

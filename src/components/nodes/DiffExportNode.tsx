@@ -33,8 +33,9 @@ const notifyLabels: Record<string, string> = {
 };
 
 export const DiffExportNode = memo(({ id, data, selected }: NodeProps<CustomNode>) => {
-  const { setDiffModalOpen } = useFlowStore();
+  const { setDiffModalOpen, setSettingsModalOpen } = useFlowStore();
   const nodeData = data || ({} as any);
+
   const config = (nodeData.config || {}) as Partial<DiffExportConfig>;
   const action = config.failureAction || "block_commit";
   const actionInfo = actionBadges[action] || actionBadges.block_commit;
@@ -65,15 +66,23 @@ export const DiffExportNode = memo(({ id, data, selected }: NodeProps<CustomNode
         </span>
       </div>
 
-      <div className="flex items-center justify-between text-[10px] text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-950/60 px-2 py-1 rounded border border-slate-200/80 dark:border-slate-800/80 font-medium">
-        <span className="flex items-center gap-1 text-slate-500 dark:text-slate-400">
+      <div
+        onClick={(e) => {
+          e.stopPropagation();
+          setSettingsModalOpen(true, "feishu");
+        }}
+        className="flex items-center justify-between text-[10px] text-slate-700 dark:text-slate-300 bg-slate-50 hover:bg-slate-100 dark:bg-slate-950/60 dark:hover:bg-slate-900 px-2 py-1 rounded border border-slate-200/80 dark:border-slate-800/80 font-medium cursor-pointer transition-colors group"
+        title="点击快速配置飞书 Webhook 与通知"
+      >
+        <span className="flex items-center gap-1 text-slate-500 dark:text-slate-400 group-hover:text-blue-500">
           <BellRing className="h-3 w-3 text-cyan-500 dark:text-cyan-400" />
           告警通道:
         </span>
-        <span className="font-mono text-cyan-600 dark:text-cyan-300">
+        <span className="font-mono text-cyan-600 dark:text-cyan-300 group-hover:underline flex items-center gap-1">
           {notifyLabels[notifyChannel] || notifyChannel}
         </span>
       </div>
+
 
       {/* Button to open Monaco Diff Comparison Modal */}
       <button

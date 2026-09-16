@@ -22,7 +22,11 @@ import {
   BookOpen,
   Info,
   CheckCircle2,
+  Bot,
+  SlidersHorizontal,
 } from "lucide-react";
+
+
 import {
   Input,
   Textarea,
@@ -118,7 +122,9 @@ export function PropertyDrawer() {
     nodeLogs,
     setNodeStatus,
     appendNodeLog,
+    setSettingsModalOpen,
   } = useFlowStore();
+
 
   const [activeTab, setActiveTab] = useState<string>("config");
   const [localData, setLocalData] = useState<FlowNodeData | null>(() => selectedNode?.data || null);
@@ -623,11 +629,20 @@ export function PropertyDrawer() {
                         }}
                       >
                         <SelectItem key="AI/deekseek-v4-flash-0731">DeepSeek-V4 Flash (推荐 · 毫秒级推演)</SelectItem>
-                        <SelectItem key="deepseek-v3">DeepSeek-V3 (企业标准平衡版)</SelectItem>
+                        <SelectItem key="deepseek-chat">DeepSeek-V3 / Chat (企业标准平衡版)</SelectItem>
+                        <SelectItem key="gpt-4o">OpenAI GPT-4o</SelectItem>
                         <SelectItem key="qwen-2.5-coder">Qwen 2.5 Coder 32B</SelectItem>
                         <SelectItem key="deepseek-r1">DeepSeek-R1 (深度思维推理模式)</SelectItem>
                       </Select>
+                      <input
+                        type="text"
+                        value={(activeData.config as LLMReviewConfig)?.model || ""}
+                        onChange={(e) => handleConfigChange("model", e.target.value)}
+                        placeholder="或输入任意企业自定义模型 (如: AI/deekseek-v4-flash-0731)"
+                        className="w-full px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-800 dark:text-slate-200 focus:outline-none focus:border-blue-500 font-mono"
+                      />
                     </div>
+
 
                     {/* Segmented Pill Selector for Severity Level */}
                     <div>
@@ -1076,14 +1091,24 @@ export function PropertyDrawer() {
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block">
-                        即时消息通知联动 (DevOps Webhook)
-                      </label>
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block">
+                          即时消息通知联动 (DevOps Webhook)
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setSettingsModalOpen(true, "feishu")}
+                          className="text-[11px] font-medium text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
+                        >
+                          <SlidersHorizontal className="h-3 w-3" />
+                          <span>配置 Webhook</span>
+                        </button>
+                      </div>
                       <Select
                         size="sm"
                         variant="bordered"
                         aria-label="即时消息通知联动"
-                        selectedKeys={new Set([(activeData.config as DiffExportConfig)?.notifyChannel || "none"])}
+                        selectedKeys={new Set([(activeData.config as DiffExportConfig)?.notifyChannel || "feishu"])}
                         onSelectionChange={(keys) => {
                           const val = Array.from(keys)[0] as string;
                           if (val) handleConfigChange("notifyChannel", val);
@@ -1094,12 +1119,35 @@ export function PropertyDrawer() {
                           value: "text-xs text-slate-800 dark:text-slate-200 font-medium",
                         }}
                       >
-                        <SelectItem key="none">无外部通知 (仅本地与平台审计)</SelectItem>
-                        <SelectItem key="feishu">飞书群机器人 Webhook</SelectItem>
+                        <SelectItem key="feishu">飞书群机器人 Webhook (支持卡片渲染)</SelectItem>
                         <SelectItem key="dingtalk">钉钉群机器人 Webhook</SelectItem>
                         <SelectItem key="slack">Slack DevOps #quality-alerts</SelectItem>
+                        <SelectItem key="none">无外部通知 (仅本地与平台审计)</SelectItem>
                       </Select>
+
+                      {/* Quick Webhook Config Card */}
+                      {((activeData.config as DiffExportConfig)?.notifyChannel === "feishu" || !(activeData.config as DiffExportConfig)?.notifyChannel) && (
+                        <div className="p-2.5 rounded-xl bg-blue-50/60 dark:bg-blue-950/30 border border-blue-200/60 dark:border-blue-900/40 text-xs flex items-center justify-between gap-2 mt-1">
+                          <div className="min-w-0">
+                            <div className="font-semibold text-[11px] text-blue-700 dark:text-blue-300 flex items-center gap-1">
+                              <Bot className="h-3.5 w-3.5" />
+                              <span>飞书群机器人对接</span>
+                            </div>
+                            <div className="text-[10px] text-slate-500 truncate mt-0.5">
+                              拦截代码时向飞书群推送自愈卡片
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setSettingsModalOpen(true, "feishu")}
+                            className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-medium shrink-0 shadow-xs transition-colors"
+                          >
+                            设置地址
+                          </button>
+                        </div>
+                      )}
                     </div>
+
 
                     <div className="space-y-1.5">
                       <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block">
