@@ -209,3 +209,28 @@ export interface ScanEventItem {
   created_at: string;
   is_read?: boolean;
 }
+
+export interface CustomGateRule {
+  title: string;
+  pattern: string;
+  message: string;
+  level: "critical" | "warning";
+}
+
+export interface AgentSkillItem {
+  title: string;
+  summary: string;
+  markdown?: string;
+  category?: string;
+}
+
+export interface SynthesizedRule {
+  title: string;
+  category: "stability" | "security" | "performance" | "architecture";
+  severity: "critical" | "warning";
+  summary: string;
+  bad_snippet: string;
+  good_snippet: string;
+  skill_markdown: string;
+  gate_rule: CustomGateRule;
+}

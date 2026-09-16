@@ -91,6 +91,10 @@ class ProjectGatePolicy:
         self.failure_action: str = "block_commit"  # "block_commit", "warn_only", "create_review_pr"
         self.notify_channel: str = "feishu"  # "feishu", "none"
 
+        # Custom learned rules & Agent skills
+        self.custom_rules: List[Dict[str, Any]] = []
+        self.agent_skills: List[Dict[str, Any]] = []
+
         self._parse(raw_policy)
 
     def _parse(self, raw_policy: Any) -> None:
@@ -103,6 +107,12 @@ class ProjectGatePolicy:
                 return
         if not isinstance(raw_policy, dict):
             return
+
+        # 0. Custom learned rules & Agent skills
+        if isinstance(raw_policy.get("custom_rules"), list):
+            self.custom_rules = raw_policy["custom_rules"]
+        if isinstance(raw_policy.get("agent_skills"), list):
+            self.agent_skills = raw_policy["agent_skills"]
 
         # 1. Preset handling
         preset = raw_policy.get("preset")
@@ -385,6 +395,20 @@ class CliScanner:
                    re.search(r"(SELECT|INSERT|UPDATE|DELETE).*f['\"].*\{[a-zA-Z0-9_]+\}", line, re.IGNORECASE):
                     critical.append(f"[{filename}] 第 {idx} 行检测到字符串拼接 SQL 语句，存在严重 SQL 注入漏洞隐患！")
 
+            # Check 5: Project Learned & Custom Rules (AI-synthesized from historical defects)
+            for rule in policy.custom_rules:
+                pat = rule.get("pattern")
+                if pat and isinstance(pat, str):
+                    try:
+                        if re.search(pat, line):
+                            msg = rule.get("message") or f"违反仓库沉淀规则: {rule.get('title', '质量卡点规范')}"
+                            if rule.get("level", "critical") == "critical":
+                                critical.append(f"[{filename}] 第 {idx} 行 {msg}")
+                            else:
+                                suggestions.append(f"[{filename}] 第 {idx} 行 {msg}")
+                    except Exception:
+                        pass
+
     @classmethod
     async def _ai_review_check(
         cls,
@@ -398,6 +422,11 @@ class CliScanner:
         """Invokes ReviewAgent configured with the project's customized prompt and severity."""
         aspects_str = "、".join(policy.review_aspects) if policy.review_aspects else "安全漏洞、崩溃风险与核心质量"
         custom_instructions = f"\n额外审查指令: {policy.custom_prompt}" if policy.custom_prompt else ""
+        if policy.agent_skills:
+            skills_summary = "\n【仓库沉淀的历史 Agent Skills 约束】:\n" + "\n".join(
+                f"- {s.get('title')}: {s.get('summary')}" for s in policy.agent_skills if s.get("title")
+            )
+            custom_instructions += skills_summary
         
         strictness_note = "严格模式：发现任何明确代码缺陷均放入 critical_issues" if policy.severity_level == "strict" else (
             "宽松模式：仅针对导致系统崩溃的致命缺陷放入 critical_issues，常规问题放入 suggestions" if policy.severity_level == "relaxed" else

@@ -35,8 +35,9 @@ const c = {
   bgGreen: isColorSupported ? "\x1b[42m" : "",
 };
 
-const API_HOST = process.env.FLOWDEV_HOST || "127.0.0.1";
-const API_PORT = process.env.FLOWDEV_PORT || 8000;
+const SERVER_URL =
+  process.env.FLOWDEV_SERVER_URL ||
+  `http://${process.env.FLOWDEV_HOST || "127.0.0.1"}:${process.env.FLOWDEV_PORT || 8000}`;
 const API_PATH = "/api/cli/scan";
 
 // Set UTF-8 encoding for standard outputs if available
@@ -68,7 +69,7 @@ function getStagedCodeFiles() {
       .filter(Boolean);
 
     // Filter relevant code files
-    const codeExts = /\.(js|jsx|ts|tsx|py)$/i;
+    const codeExts = /\.(js|jsx|ts|tsx|py|go|java)$/i;
     return lines.filter((file) => codeExts.test(file));
   } catch (e) {
     return [];
@@ -88,21 +89,44 @@ function getStagedContent(filepath) {
   }
 }
 
-function postJson(host, port, endpoint, data) {
+async function postJson(serverUrl, endpoint, data) {
+  const fullUrl = serverUrl.replace(/\/+$/, "") + endpoint;
+
+  // Use native global fetch if available (Node 18+)
+  if (typeof fetch === "function") {
+    const res = await fetch(fullUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const errBody = await res.text();
+      throw new Error(`后端门禁服务异常 [HTTP ${res.status}]: ${errBody}`);
+    }
+    return await res.json();
+  }
+
+  // Fallback to Node.js built-in http / https modules
+  const isHttps = fullUrl.startsWith("https:");
+  const client = isHttps ? require("https") : require("http");
+  const parsed = new URL(fullUrl);
+
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify(data);
-
-    const req = http.request(
+    const req = client.request(
       {
-        host,
-        port,
-        path: endpoint,
+        protocol: parsed.protocol,
+        hostname: parsed.hostname,
+        port: parsed.port || (isHttps ? 443 : 80),
+        path: parsed.pathname + (parsed.search || ""),
         method: "POST",
         headers: {
           "Content-Type": "application/json; charset=utf-8",
           "Content-Length": Buffer.byteLength(payload, "utf-8"),
         },
-        timeout: 25000,
+        timeout: 30000,
       },
       (res) => {
         let body = "";
@@ -132,7 +156,7 @@ function postJson(host, port, endpoint, data) {
 
     req.on("timeout", () => {
       req.destroy();
-      reject(new Error("请求后端门禁服务超时 (25s)"));
+      reject(new Error("请求后端门禁服务超时 (30s)"));
     });
 
     req.write(payload, "utf-8");
@@ -199,7 +223,7 @@ async function main() {
 
   let scanResult;
   try {
-    scanResult = await postJson(API_HOST, API_PORT, API_PATH, {
+    scanResult = await postJson(SERVER_URL, API_PATH, {
       project_id: projectId,
       committer,
       branch,
@@ -209,7 +233,7 @@ async function main() {
     const isStrict = process.env.FLOWDEV_STRICT === "1";
     if (isStrict) {
       console.error(
-        `\n${c.yellow}[FlowDev-AI 警告] 无法连接到门禁服务 (http://${API_HOST}:${API_PORT})${c.reset}`
+        `\n${c.yellow}[FlowDev-AI 警告] 无法连接到门禁服务 (${SERVER_URL})${c.reset}`
       );
       console.error(`   原因: ${err.message}`);
       console.error(
@@ -217,8 +241,11 @@ async function main() {
       );
       process.exit(1);
     } else {
-      console.log(
-        `\n${c.dim}[FlowDev-AI] 本地门禁服务未启动 (127.0.0.1:8000)，已安全降级放行提交 (设置 FLOWDEV_STRICT=1 可开启未启动阻断)${c.reset}\n`
+      console.warn(
+        `\n${c.yellow}[FlowDev-AI 提示] 无法连接到门禁服务 (${SERVER_URL}): ${err.message}${c.reset}`
+      );
+      console.warn(
+        `   降级策略: 本地无阻断放行提交。如需强制拦截请设置 export FLOWDEV_STRICT=1\n`
       );
       process.exit(0);
     }

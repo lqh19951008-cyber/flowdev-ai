@@ -35,8 +35,9 @@ const c = {
   bgGreen: isColorSupported ? "\x1b[42m" : "",
 };
 
-const API_HOST = process.env.FLOWDEV_HOST || "127.0.0.1";
-const API_PORT = process.env.FLOWDEV_PORT || 8000;
+const SERVER_URL =
+  process.env.FLOWDEV_SERVER_URL ||
+  `http://${process.env.FLOWDEV_HOST || "127.0.0.1"}:${process.env.FLOWDEV_PORT || 8000}`;
 const API_PATH = "/api/cli/scan";
 
 // Set UTF-8 encoding for standard outputs if available
@@ -68,7 +69,7 @@ function getStagedCodeFiles() {
       .filter(Boolean);
 
     // Filter relevant code files
-    const codeExts = /\.(js|jsx|ts|tsx|py)$/i;
+    const codeExts = /\.(js|jsx|ts|tsx|py|go|java)$/i;
     return lines.filter((file) => codeExts.test(file));
   } catch (e) {
     return [];
@@ -88,21 +89,44 @@ function getStagedContent(filepath) {
   }
 }
 
-function postJson(host, port, endpoint, data) {
+async function postJson(serverUrl, endpoint, data) {
+  const fullUrl = serverUrl.replace(/\/+$/, "") + endpoint;
+
+  // Use native global fetch if available (Node 18+)
+  if (typeof fetch === "function") {
+    const res = await fetch(fullUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const errBody = await res.text();
+      throw new Error(`后端门禁服务异常 [HTTP ${res.status}]: ${errBody}`);
+    }
+    return await res.json();
+  }
+
+  // Fallback to Node.js built-in http / https modules
+  const isHttps = fullUrl.startsWith("https:");
+  const client = isHttps ? require("https") : require("http");
+  const parsed = new URL(fullUrl);
+
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify(data);
-
-    const req = http.request(
+    const req = client.request(
       {
-        host,
-        port,
-        path: endpoint,
+        protocol: parsed.protocol,
+        hostname: parsed.hostname,
+        port: parsed.port || (isHttps ? 443 : 80),
+        path: parsed.pathname + (parsed.search || ""),
         method: "POST",
         headers: {
           "Content-Type": "application/json; charset=utf-8",
           "Content-Length": Buffer.byteLength(payload, "utf-8"),
         },
-        timeout: 25000,
+        timeout: 30000,
       },
       (res) => {
         let body = "";
@@ -132,7 +156,7 @@ function postJson(host, port, endpoint, data) {
 
     req.on("timeout", () => {
       req.destroy();
-      reject(new Error("请求后端门禁服务超时 (25s)"));
+      reject(new Error("请求后端门禁服务超时 (30s)"));
     });
 
     req.write(payload, "utf-8");
@@ -140,98 +164,56 @@ function postJson(host, port, endpoint, data) {
   });
 }
 
-function getUnstagedCodeFiles() {
-  try {
-    const output = execSync("git diff --name-only", {
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "ignore"],
-    });
-    const codeExts = /\.(js|jsx|ts|tsx|py)$/i;
-    return output.split("\n").map((f) => f.trim()).filter((f) => codeExts.test(f));
-  } catch (e) {
-    return [];
-  }
-}
-
 function getGitMetadata() {
-  let project_id = "default-project";
-  let branch = "main";
-  let committer = "developer";
-
   try {
-    const topLevel = execSync("git rev-parse --show-toplevel", {
+    const toplevel = execSync("git rev-parse --show-toplevel", {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "ignore"],
     }).trim();
-    if (topLevel) {
-      project_id = path.basename(topLevel);
-    }
-  } catch (e) {}
-
-  try {
-    const b = execSync("git rev-parse --abbrev-ref HEAD", {
+    const branch = execSync("git rev-parse --abbrev-ref HEAD", {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "ignore"],
     }).trim();
-    if (b) branch = b;
-  } catch (e) {}
-
-  try {
-    const email = execSync("git config user.email", {
+    const committer =
+      execSync("git config user.name", {
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "ignore"],
+      }).trim() || "developer";
+    const committerEmail = execSync("git config user.email", {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "ignore"],
     }).trim();
-    const name = execSync("git config user.name", {
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "ignore"],
-    }).trim();
-    if (email) {
-      committer = name ? `${name} <${email}>` : email;
-    } else if (name) {
-      committer = name;
-    }
-  } catch (e) {}
-
-  return { project_id, branch, committer };
+    const fullCommitter = committerEmail ? `${committer} <${committerEmail}>` : committer;
+    const projectId = path.basename(toplevel) || "unknown";
+    return { projectId, branch, committer: fullCommitter };
+  } catch (e) {
+    return { projectId: "default-project", branch: "main", committer: "developer" };
+  }
 }
 
 async function main() {
-  printBanner();
-  const stagedFiles = getStagedCodeFiles();
-  const unstagedFiles = getUnstagedCodeFiles();
-  const { project_id, branch, committer } = getGitMetadata();
-
-  // If no code changes in staged index, inform user and exit 0
-  if (stagedFiles.length === 0) {
-    if (unstagedFiles.length > 0) {
-      console.log(
-        `\n${c.yellow}[FlowDev-AI 提示] 检测到工作区有 ${unstagedFiles.length} 个未暂存的代码文件修改:`
-      );
-      unstagedFiles.forEach((f) => console.log(`   - ${f}`));
-      console.log(
-        `   [提示] Git 门禁仅对已执行 ${c.bold}git add${c.reset}${c.yellow} 的暂存区代码进行审查。如需审查请先运行: ${c.bold}git add <文件>${c.reset}\n`
-      );
-    } else {
-      console.log(
-        `\n${c.dim}[FlowDev-AI] 暂存区无任何 JS/TS/PY 源码文件变更，自动放行提交。${c.reset}\n`
-      );
-    }
+  // Support quick environment bypass: FLOWDEV_DISABLE=1 git commit
+  if (process.env.FLOWDEV_DISABLE === "1") {
     process.exit(0);
   }
 
+  const stagedFiles = getStagedCodeFiles();
+
+  // If no code changes in staged index, quietly allow commit
+  if (stagedFiles.length === 0) {
+    process.exit(0);
+  }
+
+  const { projectId, branch, committer } = getGitMetadata();
+
+  printBanner();
   console.log(
-    `\n[扫描] 检测到暂存区包含 ${c.bold}${stagedFiles.length}${c.reset} 个待提交源码文件 (项目: ${c.cyan}${project_id}${c.reset}, 分支: ${c.magenta}${branch}${c.reset}, 提交人: ${committer}):`
+    `\n[扫描] [${c.cyan}${projectId}${c.reset} / ${c.yellow}${branch}${c.reset}] 暂存区包含 ${c.bold}${stagedFiles.length}${c.reset} 个待提交源码文件:`
   );
   stagedFiles.forEach((f) => console.log(`   - ${f}`));
 
   console.log(
-    `\n[审查中] 正在将暂存代码发送至 FlowDev-AI 门禁服务 (http://${API_HOST}:${API_PORT}/api/cli/scan)...`
-  );
-  console.log(
-    `   [审核] ${c.magenta}ReviewAgent${c.reset} 深度语义与安全审查中...`
-  );
-  console.log(
-    `   [验证] ${c.blue}TestAgent${c.reset} 自动化单测与沙箱运行中...`
+    `\n[审查中] 正在将暂存代码交由 ${c.magenta}ReviewAgent${c.reset} 审查并在 ${c.blue}TestSandbox${c.reset} 中运行验证...`
   );
 
   const filesPayload = stagedFiles.map((file) => ({
@@ -241,25 +223,32 @@ async function main() {
 
   let scanResult;
   try {
-    scanResult = await postJson(API_HOST, API_PORT, API_PATH, {
-      project_id,
-      branch,
+    scanResult = await postJson(SERVER_URL, API_PATH, {
+      project_id: projectId,
       committer,
+      branch,
       files: filesPayload,
     });
   } catch (err) {
-    console.error(
-      `\n${c.yellow}[FlowDev-AI 警告] 无法连接到门禁服务 (http://${API_HOST}:${API_PORT})${c.reset}`
-    );
-    console.error(`   原因: ${err.message}`);
-    console.error(
-      `   提示: 请确认已启动后端服务 (cd backend && python -m uvicorn main:app --port 8000)`
-    );
-    console.error(
-      `   为保证提交安全，本次暂存代码未能完成 AI 审查。您可以使用 --no-verify 跳过，或启动后端重试。\n`
-    );
-    // Block commit by default when server is unreachable, protecting the repository
-    process.exit(1);
+    const isStrict = process.env.FLOWDEV_STRICT === "1";
+    if (isStrict) {
+      console.error(
+        `\n${c.yellow}[FlowDev-AI 警告] 无法连接到门禁服务 (${SERVER_URL})${c.reset}`
+      );
+      console.error(`   原因: ${err.message}`);
+      console.error(
+        `   提示: 当前处于严格门禁模式 (FLOWDEV_STRICT=1)，阻断提交。\n`
+      );
+      process.exit(1);
+    } else {
+      console.warn(
+        `\n${c.yellow}[FlowDev-AI 提示] 无法连接到门禁服务 (${SERVER_URL}): ${err.message}${c.reset}`
+      );
+      console.warn(
+        `   降级策略: 本地无阻断放行提交。如需强制拦截请设置 export FLOWDEV_STRICT=1\n`
+      );
+      process.exit(0);
+    }
   }
 
   console.log(

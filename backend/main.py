@@ -6,6 +6,7 @@ Provides:
 - Integration with KahnScheduler, ReviewAgent, TestAgent, and TestSandbox
 """
 
+import json
 import logging
 import sys
 
@@ -33,6 +34,8 @@ from cli_scanner import CliScanRequest, CliScanResponse, CliScanner
 
 from database import DatabaseService
 from event_bus import EventBus
+from ai_service import LLMService
+from agents import extract_code_block
 
 # Configure dual logging: console + backend/flowdev.log
 LOG_FILE = Path(__file__).parent / "flowdev.log"
@@ -149,11 +152,234 @@ async def list_all_recent_events(limit: int = 30):
     return DatabaseService.list_recent_events(project_id=None, limit=limit)
 
 
+@app.get("/api/projects/{project_id}/policy")
+async def get_project_policy(project_id: str):
+    """Retrieves the quality gate policy and synthesized rules/skills for a project."""
+    policy = DatabaseService.get_project_policy(project_id)
+    return {
+        "project_id": project_id,
+        "policy": policy,
+        "custom_rules": policy.get("custom_rules", []),
+        "agent_skills": policy.get("agent_skills", []),
+    }
+
+
 @app.put("/api/projects/{project_id}/policy")
 async def update_project_policy(project_id: str, policy: dict):
     """Updates the custom DAG review policy for a project."""
     success = DatabaseService.update_project_policy(project_id, policy)
     return {"success": success, "project_id": project_id}
+
+
+@app.post("/api/rules/synthesize")
+async def synthesize_rule_and_skill(payload: dict):
+    """Synthesizes an IDE Agent Skill and Gatekeeper Rule from intercepted code defects.
+    
+    Closed-loop evolution:
+    Intercepted bugs -> Synthesized Rule -> .cursorrules / SKILL.md for IDE AI + Regex Gate for Pre-Commit.
+    """
+    project_id = payload.get("project_id", "default")
+    critical_issues = payload.get("critical_issues", [])
+    suggestions = payload.get("suggestions", [])
+    filename = payload.get("filename", "")
+    code_snippet = payload.get("code_snippet", "")
+    language = payload.get("language", "typescript")
+
+    issues_text = "\n".join(f"- {issue}" for issue in critical_issues)
+    if not issues_text:
+        issues_text = "\n".join(f"- {s}" for s in suggestions) or "检测到代码健壮性与安全隐患"
+
+    # 1. Attempt LLM synthesis if API key is configured
+    if settings.has_api_key:
+        sys_prompt = (
+            "你是一名世界顶尖的软件架构师与 DevSecOps 质量工程专家。\n"
+            "我们正在构建一套「缺陷拦截 -> 经验沉淀 -> 规则/Skill进化」的自闭环质量防护体系。\n"
+            "用户在提交代码时被 FlowDev 门禁拦截，请从此次代码缺陷中汲取教训，提炼出可预防未来同类缺陷的规则与 IDE Agent Skill。\n"
+            "必须直接输出严格合法的 JSON 代码块（```json ... ```）：\n"
+            "{\n"
+            '  "title": "规则标题 (如: 可选链防御与空指针安全访问规范)",\n'
+            '  "category": "stability",\n'
+            '  "severity": "critical",\n'
+            '  "summary": "一句话核心指导原则与风险根因",\n'
+            '  "bad_snippet": "// ❌ 危险反例代码（带详细注释说明为何导致崩溃或风险）",\n'
+            '  "good_snippet": "// ✅ 规范正例代码（带详细防御性编程注释）",\n'
+            '  "skill_markdown": "专为 IDE AI 编程助手（Cursor / Copilot / Claude Code / Antigravity）定制的 .cursorrules / SKILL.md 规则指令 Markdown，包含触发上下文、编码准则、正反示例",\n'
+            '  "gate_rule": {\n'
+            '    "title": "卡点规则名称",\n'
+            '    "pattern": "用于在 pre-commit 正则检测中静态拦截同类高危代码的正则表达式",\n'
+            '    "message": "门禁卡点拦截提示信息",\n'
+            '    "level": "critical"\n'
+            '  }\n'
+            "}"
+        )
+        user_prompt = (
+            f"目标仓库: {project_id}\n"
+            f"目标文件: {filename}\n"
+            f"代码语言: {language}\n"
+            f"门禁拦截的严重缺陷:\n{issues_text}\n"
+        )
+        if suggestions:
+            user_prompt += f"\n改进建议:\n" + "\n".join(f"- {s}" for s in suggestions)
+        if code_snippet:
+            user_prompt += f"\n\n相关代码上下文:\n```{language}\n{code_snippet[:1500]}\n```"
+
+        messages = [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        try:
+            chunks = []
+            async for token in LLMService.stream_chat(messages, temperature=0.2):
+                chunks.append(token)
+            full_response = "".join(chunks)
+            json_str = extract_code_block(full_response, "json")
+            if json_str:
+                data = json.loads(json_str)
+                if isinstance(data, dict) and "title" in data and "good_snippet" in data:
+                    return data
+        except Exception as err:
+            logger.warning(f"LLM rule synthesis failed, falling back to heuristic engine: {err}")
+
+    # 2. Deterministic Heuristic Synthesis Engine
+    full_text = f"{filename} {issues_text} {code_snippet}".lower()
+
+    if "null" in full_text or "undefined" in full_text or "空指针" in full_text or "typeerror" in full_text:
+        return {
+            "title": "防御性可选链与空指针安全防护规范",
+            "category": "stability",
+            "severity": "critical",
+            "summary": "禁止对深层对象或外部输入进行未经校验的解构和直接链式访问，必须使用可选链（?.）与空值合并运算符（??）。",
+            "bad_snippet": "// ❌ 危险反例：未校验对象可能为空，直接进行属性深层访问，易引发 TypeError: Cannot read properties of undefined\nconst userEmail = response.data.user.profile.email;\nconst amount = order.payment.details.amount;\nprocessPayment(amount.toFixed(2));",
+            "good_snippet": "// ✅ 规范正例：使用可选链与空值合并运算符，安全降级，防御不可预期空值\nconst userEmail = response?.data?.user?.profile?.email ?? 'unregistered@example.com';\nconst amount = order?.payment?.details?.amount;\nif (typeof amount === 'number') {\n  processPayment(amount.toFixed(2));\n} else {\n  logger.warn('Missing payment amount, fallback to safe flow.');\n}",
+            "skill_markdown": "# Skill: Defensive Optional Chaining & Null Safety\n\n## Context\nWhen writing JavaScript / TypeScript code that accesses external API payloads, nested state, or optional parameters, avoid direct chaining that causes runtime crashes.\n\n## Guidelines for AI Coding Assistants\n1. **Always use optional chaining (`?.`)** when traversing 2+ levels deep into objects that may be undefined.\n2. **Provide safe fallbacks with `??`** (nullish coalescing) instead of assuming values always exist.\n3. **Perform guard clauses** early in handler functions (`if (!payload) return;`).\n4. **Do not use dangerous type assertions** (`as any` or `!`) to bypass compiler type checks.\n\n## Example\n```typescript\n// Safe access pattern\nconst total = cart?.summary?.totalAmount ?? 0;\n```\n",
+            "gate_rule": {
+                "title": "未防御的深层属性访问与空对象引用",
+                "pattern": r"\b(null|undefined)\.[a-zA-Z0-9_]+",
+                "message": "检测到针对 null/undefined 的直接属性访问，请使用可选链 (?.) 或显式判空防御！",
+                "level": "critical",
+            },
+        }
+    elif "eval" in full_text or "exec" in full_text or "代码执行" in full_text or "injection" in full_text or "sql" in full_text:
+        return {
+            "title": "杜绝危险动态执行与代码注入防御规范",
+            "category": "security",
+            "severity": "critical",
+            "summary": "严禁在业务逻辑中调用 eval()、exec() 或未参数化的 SQL 字符串拼接，消除远程代码执行（RCE）与注入风险。",
+            "bad_snippet": "// ❌ 危险反例：动态解析不可信输入，或拼接 SQL 语句\neval('const result = ' + userInput);\nconst query = 'SELECT * FROM users WHERE id = ' + userId;",
+            "good_snippet": "// ✅ 规范正例：使用安全解析库与参数化查询\nconst parsed = JSON.parse(userInput);\nconst query = 'SELECT * FROM users WHERE id = ?';\nawait db.query(query, [userId]);",
+            "skill_markdown": "# Skill: Secure Execution & Injection Prevention\n\n## Context\nPrevent security vulnerabilities arising from untrusted input execution or unsanitized database queries.\n\n## Guidelines for AI Coding Assistants\n1. Never recommend or generate `eval()`, `exec()`, `Function()`, or `setTimeout` with string arguments.\n2. Always use parameterized queries or ORM query builders (e.g. Prisma, Drizzle, SQLAlchemy) for database interactions.\n3. Validate all incoming payload schemas with Zod, Joi, or Pydantic.\n",
+            "gate_rule": {
+                "title": "高危动态执行与注入函数检测",
+                "pattern": r"\b(eval|exec)\s*\(",
+                "message": "严禁使用 eval() 或 exec() 危险动态执行函数！",
+                "level": "critical",
+            },
+        }
+    elif "key" in full_text or "secret" in full_text or "token" in full_text or "凭证" in full_text or "密钥" in full_text:
+        return {
+            "title": "敏感凭据与 API Key 防泄露隔离规范",
+            "category": "security",
+            "severity": "critical",
+            "summary": "严禁在源代码中硬编码 API Key、Access Token、私钥或密码，所有敏感凭证必须通过环境变量注入。",
+            "bad_snippet": "// ❌ 危险反例：直接硬编码敏感密钥提交至版本库\nconst OPENAI_KEY = 'sk-proj-xxxxxxxxxxxxxxxxxxxxxx';\nconst DB_PASS = 'ProdSuperSecret123!';",
+            "good_snippet": "// ✅ 规范正例：从安全环境变量中读取凭据\nconst OPENAI_KEY = process.env.OPENAI_API_KEY;\nif (!OPENAI_KEY) {\n  throw new Error('Missing OPENAI_API_KEY environment variable');\n}",
+            "skill_markdown": "# Skill: Secret & Credential Zero-Leakage Policy\n\n## Context\nPrevent accidental commitment of tokens, private keys, and passwords.\n\n## Guidelines for AI Coding Assistants\n1. Never inline secrets or hardcoded test tokens in production code.\n2. Always reference environment variables via `process.env.*` or `os.environ.get()`.\n3. Add `.env*` to `.gitignore` automatically.\n",
+            "gate_rule": {
+                "title": "硬编码凭证与密钥拦截",
+                "pattern": r"(sk-[a-zA-Z0-9_\-]{20,}|AKIA[0-9A-Z]{16})",
+                "message": "检测到硬编码敏感密钥或凭据，严禁提交至版本控制库！",
+                "level": "critical",
+            },
+        }
+    else:
+        return {
+            "title": f"代码健壮性与边界防御规范 ({project_id})",
+            "category": "stability",
+            "severity": "critical",
+            "summary": f"针对近期门禁拦截的质量隐患，建立前置校验与防御性编程准则。",
+            "bad_snippet": f"// ❌ 历史拦截隐患:\n// {issues_text}\n// 未进行异常防护或边界条件处理",
+            "good_snippet": "// ✅ 规范正例: 完善边界防御与类型保护\ntry {\n  // 稳健的核心业务执行逻辑\n} catch (error) {\n  logger.error('Safe recovery from error:', error);\n}",
+            "skill_markdown": f"# Skill: Defensive Programming Standard for {project_id}\n\n## Context\nHistorical gatekeeper scan intercepted defects: {issues_text}.\n\n## Guidelines for AI Coding Assistants\n1. Always validate inputs at the public interface boundary.\n2. Handle error states gracefully without crashing the runtime.\n3. Provide unit test coverage for edge cases.\n",
+            "gate_rule": {
+                "title": "通用健壮性与边界防御规则",
+                "pattern": r"\b(throw\s+new\s+Error|assert\s+False)",
+                "message": "请确认异常抛出逻辑具备完整的错误捕获与日志记录",
+                "level": "warning",
+            },
+        }
+
+
+@app.post("/api/projects/{project_id}/rules/apply")
+async def apply_project_rule(project_id: str, payload: dict):
+    """Applies and persists a synthesized rule and agent skill to the project's gatekeeper policy."""
+    policy = DatabaseService.get_project_policy(project_id) or {}
+    custom_rules = policy.get("custom_rules", [])
+    agent_skills = policy.get("agent_skills", [])
+
+    rule = payload.get("custom_rule")
+    skill = payload.get("agent_skill")
+
+    if rule and isinstance(rule, dict):
+        existing_idx = next(
+            (i for i, r in enumerate(custom_rules) if r.get("title") == rule.get("title") or (rule.get("pattern") and r.get("pattern") == rule.get("pattern"))),
+            None,
+        )
+        if existing_idx is not None:
+            custom_rules[existing_idx] = rule
+        else:
+            custom_rules.append(rule)
+        policy["custom_rules"] = custom_rules
+
+    if skill and isinstance(skill, dict):
+        existing_idx = next(
+            (i for i, s in enumerate(agent_skills) if s.get("title") == skill.get("title")),
+            None,
+        )
+        if existing_idx is not None:
+            agent_skills[existing_idx] = skill
+        else:
+            agent_skills.append(skill)
+        policy["agent_skills"] = agent_skills
+
+    success = DatabaseService.update_project_policy(project_id, policy)
+    return {
+        "success": success,
+        "project_id": project_id,
+        "custom_rules_count": len(custom_rules),
+        "agent_skills_count": len(agent_skills),
+        "policy": policy,
+    }
+
+
+@app.delete("/api/projects/{project_id}/rules")
+async def delete_project_rule(project_id: str, payload: dict):
+    """Removes a custom rule or skill from a project's gatekeeper policy."""
+    policy = DatabaseService.get_project_policy(project_id) or {}
+    custom_rules = policy.get("custom_rules", [])
+    agent_skills = policy.get("agent_skills", [])
+
+    title = payload.get("title")
+    rule_idx = payload.get("rule_index")
+    skill_idx = payload.get("skill_index")
+
+    if title:
+        policy["custom_rules"] = [r for r in custom_rules if r.get("title") != title]
+        policy["agent_skills"] = [s for s in agent_skills if s.get("title") != title]
+    elif rule_idx is not None and 0 <= rule_idx < len(custom_rules):
+        custom_rules.pop(rule_idx)
+        policy["custom_rules"] = custom_rules
+    elif skill_idx is not None and 0 <= skill_idx < len(agent_skills):
+        agent_skills.pop(skill_idx)
+        policy["agent_skills"] = agent_skills
+
+    success = DatabaseService.update_project_policy(project_id, policy)
+    return {
+        "success": success,
+        "project_id": project_id,
+        "custom_rules": policy.get("custom_rules", []),
+        "agent_skills": policy.get("agent_skills", []),
+    }
 
 
 @app.get("/api/events/stream")

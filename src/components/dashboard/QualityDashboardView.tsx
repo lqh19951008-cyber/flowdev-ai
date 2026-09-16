@@ -22,10 +22,15 @@ import {
   MailOpen,
   Eye,
   Bot,
+  Terminal,
+  Zap,
 } from "lucide-react";
 import { Chip } from "@heroui/react";
 import { useFlowStore } from "@/stores/useFlowStore";
 import { cn, formatTime, formatRelativeTime, formatDate } from "@/lib/utils";
+import { IntegrationGuideModal } from "@/components/modal/IntegrationGuideModal";
+import { RuleEvolutionModal } from "@/components/modal/RuleEvolutionModal";
+import { ScanEventItem } from "@/types/flow";
 
 
 export function QualityDashboardView() {
@@ -50,6 +55,19 @@ export function QualityDashboardView() {
   const [searchKeyword, setSearchKeyword] = useState<string>("");
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isIntegrationModalOpen, setIsIntegrationModalOpen] = useState(false);
+  const [isRuleModalOpen, setIsRuleModalOpen] = useState(false);
+  const [ruleModalEvent, setRuleModalEvent] = useState<ScanEventItem | null>(null);
+
+  const handleOpenRuleEvolution = (event: ScanEventItem) => {
+    setRuleModalEvent(event);
+    setIsRuleModalOpen(true);
+  };
+
+  const handleOpenRuleLibrary = () => {
+    setRuleModalEvent(null);
+    setIsRuleModalOpen(true);
+  };
 
 
   useEffect(() => {
@@ -135,9 +153,27 @@ export function QualityDashboardView() {
 
 
           <button
+            onClick={() => setIsIntegrationModalOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors shadow-sm cursor-pointer"
+            title="查看外部代码仓库如何接入 FlowDev 门禁探针"
+          >
+            <Terminal className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400" />
+            <span>接入指引</span>
+          </button>
+
+          <button
+            onClick={handleOpenRuleLibrary}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-xs font-semibold text-amber-700 dark:text-amber-300 transition-colors shadow-sm cursor-pointer"
+            title="查看与导出已沉淀的 IDE Agent Skills 与门禁规则库"
+          >
+            <Sparkles className="h-3.5 w-3.5 text-amber-500" />
+            <span>规则与 Skill 库</span>
+          </button>
+
+          <button
             onClick={handleRefresh}
             disabled={isRefreshing}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors shadow-sm"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors shadow-sm cursor-pointer"
             title="刷新大盘最新数据"
           >
             <RefreshCw className={cn("h-3.5 w-3.5 text-slate-500 dark:text-slate-400", isRefreshing && "animate-spin text-blue-500")} />
@@ -614,6 +650,25 @@ export function QualityDashboardView() {
                                   </ul>
                                 </div>
                               )}
+
+                              {/* Rule & Skill Evolution Action Bar */}
+                              <div className="pt-2 flex items-center justify-between border-t border-slate-200/60 dark:border-slate-800 flex-wrap gap-2">
+                                <div className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                                  <Sparkles className="h-3.5 w-3.5 text-amber-500 animate-pulse" />
+                                  <span>防患于未然：从本次门禁拦截沉淀为团队工程规范与 IDE 智能体 Skill</span>
+                                </div>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleOpenRuleEvolution(ev);
+                                  }}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-gradient-to-r from-amber-500 via-indigo-600 to-cyan-600 hover:from-amber-600 hover:to-indigo-700 text-white shadow-sm hover:shadow transition-all cursor-pointer"
+                                  title="一键提炼规则并转化为 .cursorrules / SKILL.md 与门禁卡点"
+                                >
+                                  <Zap className="h-3.5 w-3.5" />
+                                  <span>💡 沉淀为规则与 Skill</span>
+                                </button>
+                              </div>
                             </div>
                           </td>
                         </tr>
@@ -626,7 +681,19 @@ export function QualityDashboardView() {
           </table>
         </div>
       </div>
+
+      <IntegrationGuideModal
+        isOpen={isIntegrationModalOpen}
+        onClose={() => setIsIntegrationModalOpen(false)}
+      />
+
+      <RuleEvolutionModal
+        isOpen={isRuleModalOpen}
+        onClose={() => setIsRuleModalOpen(false)}
+        scanEvent={ruleModalEvent}
+        projectId={selectedProjectId}
+        onRuleApplied={handleRefresh}
+      />
     </div>
   );
 }
-
