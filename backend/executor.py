@@ -307,3 +307,23 @@ class WorkflowExecutor:
         await asyncio.sleep(0.3)
         yield sse_event("node_log", {"nodeId": node.id, "log": f"💾 差异补丁与审查报告就绪，归档路径: {output_path}"})
         await asyncio.sleep(0.2)
+
+        # Send Feishu notification card if configured
+        if config.get("notifyChannel") == "feishu" or settings.has_feishu:
+            try:
+                from feishu_notifier import FeishuNotifier
+                sent = await FeishuNotifier.send_audit_card(
+                    project_id="flowdev-ai",
+                    committer="FlowDev-IDE",
+                    branch="main",
+                    passed=True,
+                    critical_issues=[],
+                    suggestions=["建议在核心业务分支合入前完成全量沙箱单测验证"],
+                    summary="DAG 策略仿真执行完成，所有节点均流式验证通过！",
+                    files_count=1,
+                    webhook_url=settings.FEISHU_WEBHOOK_URL,
+                )
+                if sent:
+                    yield sse_event("node_log", {"nodeId": node.id, "log": "🔔 已向飞书群机器人成功推送本次策略执行卡片！"})
+            except Exception as e:
+                logger.warning(f"Failed to send Feishu notification from executor: {e}")

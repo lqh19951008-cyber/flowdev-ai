@@ -5,6 +5,14 @@ import { HeroUIProvider } from "@/components/providers/HeroUIProvider";
 export const metadata: Metadata = {
   title: "FlowDev-AI | 企业研发效能与代码门禁管控中台",
   description: "基于 HeroUI 与 Kahn DAG 拓扑编排的轻量高效代码门禁管控系统",
+  icons: {
+    icon: [
+      { url: "/favicon.svg", type: "image/svg+xml" },
+      { url: "/favicon.ico" },
+    ],
+    shortcut: "/favicon.svg",
+    apple: "/favicon.svg",
+  },
 };
 
 export default function RootLayout({

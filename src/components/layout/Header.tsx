@@ -3,12 +3,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import {
   Workflow,
-  Play,
-  RotateCcw,
-  PanelLeft,
   PanelRight,
-  GitGraph,
-  GitCompare,
   Loader2,
   LayoutTemplate,
   ChevronDown,
@@ -30,19 +25,10 @@ import { WORKFLOW_PRESETS } from "@/lib/presets";
 import { PresetId } from "@/types/flow";
 import { cn } from "@/lib/utils";
 
-
-
 export function Header() {
   const {
-    isSidebarOpen,
     isDrawerOpen,
-    toggleSidebar,
     toggleDrawer,
-    clearCanvas,
-    setTopologyModalOpen,
-    setDiffModalOpen,
-    isExecuting,
-    executeWorkflow,
     loadPreset,
     activePresetId,
     // Multi-tenant & Live Guard
@@ -52,7 +38,6 @@ export function Header() {
     unreadEventsCount,
     isLiveFeedOpen,
     setLiveFeedOpen,
-    setProjectStatsModalOpen,
     saveCurrentPolicyToProject,
     fetchProjects,
     fetchRecentEvents,
@@ -274,15 +259,6 @@ export function Header() {
         </div>
       </div>
 
-      {/* Center: Execution Indicator (only shows when running in pipeline mode) */}
-      <div className="hidden md:flex items-center justify-center">
-        {activeViewMode === "pipeline" && isExecuting && (
-          <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-500/40 text-xs text-blue-700 dark:text-blue-300 animate-pulse whitespace-nowrap">
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600 dark:text-blue-400" />
-            <span>Kahn DAG 管道流式执行中...</span>
-          </div>
-        )}
-      </div>
 
       {/* Right: Actions & Controls */}
       {activeViewMode === "dashboard" ? (
@@ -360,7 +336,7 @@ export function Header() {
           </button>
         </div>
       ) : (
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
           {/* Preset Workflow Templates Dropdown */}
           <div className="relative shrink-0" ref={presetMenuRef}>
             <button
@@ -411,52 +387,15 @@ export function Header() {
             )}
           </div>
 
-          {/* Clear Canvas Button */}
-          <button
-            onClick={() => clearCanvas()}
-            className="flex items-center gap-1 px-2 py-1.5 text-xs font-medium text-slate-500 dark:text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/10 rounded-lg transition-colors whitespace-nowrap shrink-0"
-            title="清空画布"
-          >
-            <RotateCcw className="h-3.5 w-3.5 shrink-0" />
-            <span>清空</span>
-          </button>
-
-          <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
-
-          {/* Run Workflow (Primary Action) */}
-          <button
-            onClick={() => executeWorkflow()}
-            disabled={isExecuting}
-            className={cn(
-              "flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white rounded-lg shadow-md transition-all active:scale-95 whitespace-nowrap shrink-0",
-              isExecuting
-                ? "bg-blue-800/80 cursor-wait opacity-90"
-                : "bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 shadow-blue-500/20"
-            )}
-            title="运行策略流水线，仿真验证缺陷拦截力"
-          >
-            {isExecuting ? (
-              <>
-                <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
-                <span>实测中...</span>
-              </>
-            ) : (
-              <>
-                <Play className="h-3.5 w-3.5 fill-current shrink-0" />
-                <span>策略实测</span>
-              </>
-            )}
-          </button>
-
           {/* Save Policy to Project Button */}
           <button
             onClick={handleSavePolicyToProject}
             disabled={isSavingPolicy}
             className={cn(
-              "flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-all whitespace-nowrap shrink-0",
+              "flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg shadow-sm transition-all active:scale-95 whitespace-nowrap shrink-0",
               isPolicySaved
-                ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/40 font-semibold"
-                : "bg-slate-100 dark:bg-slate-900 hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:text-slate-900 dark:hover:text-white"
+                ? "bg-emerald-600 text-white shadow-emerald-500/20"
+                : "bg-blue-600 hover:bg-blue-500 text-white shadow-blue-500/20"
             )}
             title={`将当前画布 DAG 策略保存下发至 ${
               selectedProjectId === "all" ? "rxjs" : selectedProjectId
@@ -464,42 +403,20 @@ export function Header() {
           >
             {isPolicySaved ? (
               <>
-                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                <span>已下发</span>
+                <CheckCircle2 className="h-3.5 w-3.5 text-white shrink-0" />
+                <span>已下发策略</span>
               </>
             ) : isSavingPolicy ? (
               <>
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500 shrink-0" />
-                <span>同步中...</span>
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-white shrink-0" />
+                <span>下发中...</span>
               </>
             ) : (
               <>
-                <Save className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+                <Save className="h-3.5 w-3.5 text-white shrink-0" />
                 <span>下发策略</span>
               </>
             )}
-          </button>
-
-          <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
-
-          {/* View Code Diff Modal Button */}
-          <button
-            onClick={() => setDiffModalOpen(true)}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white bg-slate-100 dark:bg-slate-900 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
-            title="打开 Monaco 双向 Diff 比对与修复成果导出"
-          >
-            <GitCompare className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400 shrink-0" />
-            <span>代码 Diff</span>
-          </button>
-
-          {/* View Topology JSON Button */}
-          <button
-            onClick={() => setTopologyModalOpen(true)}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white bg-slate-100 dark:bg-slate-900 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
-            title="查看工作流拓扑结构与 LangGraph JSON 依赖"
-          >
-            <GitGraph className="h-3.5 w-3.5 text-indigo-500 shrink-0" />
-            <span>拓扑查看</span>
           </button>
 
           <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
