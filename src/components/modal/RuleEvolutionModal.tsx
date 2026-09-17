@@ -194,13 +194,19 @@ export function RuleEvolutionModal({
     URL.revokeObjectURL(url);
   };
 
-  const handleDownloadFormat = async (format: "cursorrules" | "claude_md" | "copilot" | "windsurf") => {
+  const handleDownloadFormat = async (
+    format: "antigravity_skill" | "gemini_md" | "cursorrules" | "claude_md" | "copilot" | "windsurf"
+  ) => {
     try {
       const res = await fetch(`http://127.0.0.1:8000/api/projects/${encodeURIComponent(targetProjectId)}/skills/export?format=${format}`);
       if (res.ok) {
         const text = await res.text();
         const filename =
-          format === "cursorrules"
+          format === "antigravity_skill"
+            ? "SKILL.md"
+            : format === "gemini_md"
+            ? "GEMINI.md"
+            : format === "cursorrules"
             ? ".cursorrules"
             : format === "claude_md"
             ? "CLAUDE.md"
@@ -543,19 +549,33 @@ export function RuleEvolutionModal({
                       <span>方式 2：提交入库全员自动生效 (Team Git Sync)</span>
                     </div>
                     <p className="text-[11px] text-slate-500 leading-relaxed">
-                      将拉取或下载的 <code className="text-indigo-600 font-mono">.cursorrules</code> 提交至仓库 Git 版本控制：
+                      执行同步后，生成的 <code className="text-indigo-600 font-mono">.agent/skills/flowdev-quality/SKILL.md</code> 与 <code className="text-indigo-600 font-mono">GEMINI.md</code> 提交入库：
                     </p>
                     <div className="p-2 rounded bg-slate-100 dark:bg-slate-800/60 text-slate-700 dark:text-slate-300 font-mono text-[11px] leading-relaxed">
-                      <code>git add .cursorrules &amp;&amp; git commit -m &quot;chore: 沉淀团队 AI 规范&quot;</code>
+                      <code>git add .agent GEMINI.md .cursorrules &amp;&amp; git commit -m &quot;chore: 沉淀团队 AI 规范&quot;</code>
                     </div>
                     <p className="text-[10.5px] text-emerald-600 dark:text-emerald-400 font-medium">
-                      ✓ 团队其他成员执行 <code>git pull</code> 后，无需任何配置，本地 Cursor / Copilot 全员自动生效！
+                      ✓ 团队其他成员执行 <code>git pull</code> 后，本地 Antigravity / Cursor / Copilot 全员自动生效！
                     </p>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2 pt-1 flex-wrap">
-                  <span className="text-[11px] text-slate-500 font-medium">快速按需下载规范文件:</span>
+                  <span className="text-[11px] text-slate-500 font-medium">快速按需导出规范:</span>
+                  <button
+                    onClick={() => handleDownloadFormat("antigravity_skill")}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 transition-all shadow-xs cursor-pointer"
+                  >
+                    <Sparkles className="h-3 w-3 text-cyan-300" />
+                    <span>⚡ Antigravity Skill (SKILL.md)</span>
+                  </button>
+                  <button
+                    onClick={() => handleDownloadFormat("gemini_md")}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-blue-400 text-slate-700 dark:text-slate-200 transition-all shadow-xs cursor-pointer"
+                  >
+                    <FileText className="h-3 w-3 text-blue-500" />
+                    <span>GEMINI.md (Antigravity Rules)</span>
+                  </button>
                   <button
                     onClick={() => handleDownloadFormat("cursorrules")}
                     className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 text-slate-700 dark:text-slate-200 transition-all shadow-xs cursor-pointer"
@@ -565,24 +585,24 @@ export function RuleEvolutionModal({
                   </button>
                   <button
                     onClick={() => handleDownloadFormat("claude_md")}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 text-slate-700 dark:text-slate-200 transition-all shadow-xs cursor-pointer"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-amber-400 text-slate-700 dark:text-slate-200 transition-all shadow-xs cursor-pointer"
                   >
                     <Download className="h-3 w-3 text-amber-500" />
                     <span>CLAUDE.md (Claude Code)</span>
                   </button>
                   <button
                     onClick={() => handleDownloadFormat("copilot")}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 text-slate-700 dark:text-slate-200 transition-all shadow-xs cursor-pointer"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-cyan-400 text-slate-700 dark:text-slate-200 transition-all shadow-xs cursor-pointer"
                   >
-                    <Download className="h-3 w-3 text-blue-500" />
-                    <span>copilot-instructions.md (Copilot)</span>
+                    <Download className="h-3 w-3 text-cyan-500" />
+                    <span>copilot-instructions.md</span>
                   </button>
                   <button
                     onClick={() => handleDownloadFormat("windsurf")}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 text-slate-700 dark:text-slate-200 transition-all shadow-xs cursor-pointer"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-teal-400 text-slate-700 dark:text-slate-200 transition-all shadow-xs cursor-pointer"
                   >
                     <Download className="h-3 w-3 text-teal-500" />
-                    <span>.windsurfrules (Windsurf)</span>
+                    <span>.windsurfrules</span>
                   </button>
                 </div>
               </div>

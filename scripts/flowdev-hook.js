@@ -211,19 +211,44 @@ async function syncSkills() {
   console.log(`${c.cyan}${c.bold}================================================================${c.reset}\n`);
 
   try {
-    // 1. Fetch .cursorrules
+    // 1. Antigravity Skill (.agents/skills/flowdev-quality/SKILL.md & .agent/skills/flowdev-quality/SKILL.md)
+    const agySkillContent = await fetchText(`${SERVER_URL}/api/projects/${encodeURIComponent(targetProject)}/skills/export?format=antigravity_skill`);
+    const agySkillDirs = [
+      path.join(gitRoot, ".agent", "skills", "flowdev-quality"),
+      path.join(gitRoot, ".agents", "skills", "flowdev-quality"),
+    ];
+    for (const dir of agySkillDirs) {
+      fs.mkdirSync(dir, { recursive: true });
+      const skillPath = path.join(dir, "SKILL.md");
+      fs.writeFileSync(skillPath, agySkillContent, "utf8");
+      console.log(`  ${c.green}✓ 已更新 Antigravity 智能体技能:${c.reset} ${skillPath}`);
+    }
+
+    // 2. Antigravity Project Rules (GEMINI.md & AGENTS.md & .agents/rules/flowdev-quality.md)
+    const agyRuleContent = await fetchText(`${SERVER_URL}/api/projects/${encodeURIComponent(targetProject)}/skills/export?format=gemini_md`);
+    const geminiPath = path.join(gitRoot, "GEMINI.md");
+    const agentsPath = path.join(gitRoot, "AGENTS.md");
+    fs.writeFileSync(geminiPath, agyRuleContent, "utf8");
+    fs.writeFileSync(agentsPath, agyRuleContent, "utf8");
+    console.log(`  ${c.green}✓ 已更新 Antigravity 规则文件:${c.reset} ${geminiPath} & ${agentsPath}`);
+
+    const agyRulesDir = path.join(gitRoot, ".agents", "rules");
+    fs.mkdirSync(agyRulesDir, { recursive: true });
+    fs.writeFileSync(path.join(agyRulesDir, "flowdev-quality.md"), agyRuleContent, "utf8");
+
+    // 3. Cursor (.cursorrules & .cursor/rules/flowdev-guards.mdc)
     const cursorRulesContent = await fetchText(`${SERVER_URL}/api/projects/${encodeURIComponent(targetProject)}/skills/export?format=cursorrules`);
     const cursorPath = path.join(gitRoot, ".cursorrules");
     fs.writeFileSync(cursorPath, cursorRulesContent, "utf8");
     console.log(`  ${c.green}✓ 已更新 Cursor 规范文件:${c.reset} ${cursorPath}`);
 
-    // 2. Fetch CLAUDE.md
+    // 4. Claude Code (CLAUDE.md)
     const claudeContent = await fetchText(`${SERVER_URL}/api/projects/${encodeURIComponent(targetProject)}/skills/export?format=claude_md`);
     const claudePath = path.join(gitRoot, "CLAUDE.md");
     fs.writeFileSync(claudePath, claudeContent, "utf8");
     console.log(`  ${c.green}✓ 已更新 Claude Code 指南:${c.reset} ${claudePath}`);
 
-    // 3. Optional: GitHub Copilot instructions if .github exists
+    // 5. GitHub Copilot instructions if .github exists
     const githubDir = path.join(gitRoot, ".github");
     if (fs.existsSync(githubDir)) {
       const copilotContent = await fetchText(`${SERVER_URL}/api/projects/${encodeURIComponent(targetProject)}/skills/export?format=copilot`);
@@ -232,13 +257,13 @@ async function syncSkills() {
       console.log(`  ${c.green}✓ 已更新 Copilot 指令:${c.reset} ${copilotPath}`);
     }
 
-    // 4. Windsurf rules
+    // 6. Windsurf rules (.windsurfrules)
     const windsurfPath = path.join(gitRoot, ".windsurfrules");
     fs.writeFileSync(windsurfPath, cursorRulesContent, "utf8");
     console.log(`  ${c.green}✓ 已更新 Windsurf 规范:${c.reset} ${windsurfPath}`);
 
-    console.log(`\n${c.green}${c.bold}✨ 技能同步成功！${c.reset}`);
-    console.log(`${c.dim}提示: 建议将生成的文件执行 git commit 提交入库，团队其他成员 git pull 后将全员生效。${c.reset}\n`);
+    console.log(`\n${c.green}${c.bold}✨ Antigravity & IDE 智能体技能全量同步成功！${c.reset}`);
+    console.log(`${c.dim}提示: Antigravity 会在本地编程和对话中自动加载 .agent/skills/flowdev-quality/SKILL.md 与 GEMINI.md。${c.reset}\n`);
     process.exit(0);
   } catch (err) {
     console.error(`\n${c.red}[错误] 同步 Agent Skills 失败: ${err.message}${c.reset}\n`);

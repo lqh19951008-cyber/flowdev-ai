@@ -432,11 +432,13 @@ async def export_project_skills(
     format: str = "cursorrules",
     incremental: bool = False,
 ):
-    """Exports synthesized skills and quality rules for IDE AI agents (Cursor, Claude, Copilot, Windsurf).
+    """Exports synthesized skills and quality rules for IDE AI agents (Antigravity, Cursor, Claude, Copilot, Windsurf).
     
     Supported formats:
+    - antigravity_skill / agy_skill: .agent/skills/flowdev-quality/SKILL.md format with YAML frontmatter
+    - gemini_md / agents_md: GEMINI.md / AGENTS.md format for Antigravity & AI coding assistants
     - cursorrules: .cursorrules Markdown format
-    - cursor_mdc: .cursor/rules/flowdev-guards.mdc modular format (preserves existing .cursorrules completely!)
+    - cursor_mdc: .cursor/rules/flowdev-guards.mdc modular format
     - claude_md: CLAUDE.md guidelines format
     - copilot: .github/copilot-instructions.md format
     - windsurf: .windsurfrules format
@@ -455,6 +457,86 @@ async def export_project_skills(
         }
 
     lines = []
+
+    # Format 1: Antigravity SKILL.md (Google AGY Skill Specification)
+    if format in ("antigravity_skill", "agy_skill", "skill_md"):
+        lines.extend([
+            "---",
+            "name: flowdev-quality",
+            f"description: FlowDev-AI Code Quality & Pre-Commit Gatekeeper Defensive Guidelines for {project_id}.",
+            "---",
+            "",
+            f"# FlowDev-AI Defensive Coding Skill ({project_id})",
+            "",
+            f"This skill contains active quality guidelines, architectural constraints, and learned anti-patterns for `{project_id}`.",
+            "",
+            "## 🛡️ Critical Quality Gate Requirements",
+            "When generating or refactoring code in this repository, you MUST adhere to the following rules:",
+            "",
+        ])
+        if custom_rules:
+            lines.append("### Active Pre-Commit Gatekeeper Regex Checks")
+            for r in custom_rules:
+                lines.append(f"- **{r.get('title', 'Rule')}**: `{r.get('pattern', '')}` (Level: {r.get('level', 'critical')})")
+                if r.get("message"):
+                    lines.append(f"  *Enforcement:* {r.get('message')}")
+            lines.append("")
+
+        if agent_skills:
+            lines.append("## 📚 Synthesized Engineering Best Practices")
+            for idx, skill in enumerate(agent_skills, 1):
+                lines.append(f"### Rule {idx}: {skill.get('title', 'Defensive Rule')}")
+                lines.append(f"**Principle:** {skill.get('summary', '')}")
+                lines.append("")
+                if skill.get("markdown"):
+                    lines.append(skill.get("markdown"))
+                    lines.append("")
+        else:
+            lines.append("## 📚 Standard Defensive Rules")
+            lines.append("- Always perform defensive null checks (`?.`, `??`).")
+            lines.append("- Never use dangerous dynamic execution functions like `eval()`.")
+            lines.append("- Keep all credentials and tokens in environment variables.")
+            lines.append("- Write unit tests for core edge cases.")
+
+        content = "\n".join(lines)
+        return PlainTextResponse(content=content, media_type="text/markdown; charset=utf-8")
+
+    # Format 2: Antigravity GEMINI.md / AGENTS.md Rules File
+    if format in ("gemini_md", "agents_md", "antigravity_rule"):
+        lines.extend([
+            f"# Antigravity Project Instructions for {project_id}",
+            "",
+            "> Automatically generated and synced by FlowDev-AI Quality Gatekeeper.",
+            "> Enforced at both IDE AI level and Git Pre-Commit level.",
+            "",
+            "## Code Quality Standards & Guidelines",
+            "",
+        ])
+        if custom_rules:
+            lines.append("### Pre-Commit Gatekeeper Constraints")
+            for r in custom_rules:
+                lines.append(f"- **{r.get('title', 'Rule')}**: `{r.get('pattern', '')}`")
+                if r.get("message"):
+                    lines.append(f"  *Action:* {r.get('message')}")
+            lines.append("")
+
+        if agent_skills:
+            lines.append("### Project-Specific Agent Skills & Defensive Rules")
+            for idx, skill in enumerate(agent_skills, 1):
+                lines.append(f"#### {idx}. {skill.get('title', 'Defensive Standard')}")
+                lines.append(f"**Summary:** {skill.get('summary', '')}")
+                lines.append("")
+                if skill.get("markdown"):
+                    lines.append(skill.get("markdown"))
+                    lines.append("")
+        else:
+            lines.append("### General Rules")
+            lines.append("- Guard against null/undefined property dereferences.")
+            lines.append("- Never hardcode API keys or credentials.")
+            lines.append("- Prevent SQL/Command injections with parameterized queries.")
+
+        content = "\n".join(lines)
+        return PlainTextResponse(content=content, media_type="text/markdown; charset=utf-8")
 
     # Cursor 0.40+ Modular Rule format (.cursor/rules/*.mdc)
     if format == "cursor_mdc":
