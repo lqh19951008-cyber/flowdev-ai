@@ -501,13 +501,19 @@ class CliScanner:
                     json_block = match.group(0)
 
             if json_block:
-                data = json.loads(json_block)
-                if isinstance(data.get("critical_issues"), list):
-                    for issue in data["critical_issues"]:
+                try:
+                    data = json.loads(json_block)
+                except Exception:
+                    data = {}
+                data_dict = data if isinstance(data, dict) else {}
+                critical_list = data_dict.get("critical_issues") or []
+                if isinstance(critical_list, list):
+                    for issue in critical_list:
                         if issue and isinstance(issue, str):
                             critical.append(f"[{filename}] {issue}")
-                if isinstance(data.get("suggestions"), list):
-                    for sug in data["suggestions"]:
+                suggestions_list = data_dict.get("suggestions") or []
+                if isinstance(suggestions_list, list):
+                    for sug in suggestions_list:
                         if sug and isinstance(sug, str):
                             suggestions.append(f"[{filename}] {sug}")
         except Exception as e:
