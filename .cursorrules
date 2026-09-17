@@ -147,6 +147,8 @@ The repository gatekeeper actively blocks commits violating these regex patterns
   *Reason:* 检测到针对 null/undefined 的直接属性访问，请使用可选链 (?.) 或显式判空防御！
 - **拦截高危函数 / 字符串拼接 SQL / 硬编码密钥 / 通配 CORS / shell 模板注入 / 链式 .get 缺 None 防御**: `(?ms)(?:^|[^A-Za-z_])(?:eval\s*\(|exec\s*\(|execSync\s*\([^)]*\$\{|allow_origins\s*=\s*\[\s*["']\*["']\s*\]|["']\s*\+\s*[A-Za-z_][A-Za-z0-9_]*\s*\+\s*["'].*?(?:SELECT|INSERT|UPDATE|DELETE|FROM\s+\w+)|sk-[A-Za-z0-9_-]{16,}\s*=\s*["'][^"']+["']|(?<![A-Za-z_])\.get\([^)]+\)\s*\.get\(|child_process.*?execSync\s*\(\s*`[^`]*\$\{))`
   *Reason:* FlowDev 安全门禁拦截：检测到高危代码模式（eval/exec/shell模板注入/SQL字符串拼接/硬编码sk-/通配CORS/缺None防御的链式.get），请改用参数化查询、execFile数组参数、显式CORS域名白名单、`or {}`空值防御与Pydantic/Zod强类型校验。
+- **高危动态执行与注入函数检测**: `\b(eval|exec)\s*\(`
+  *Reason:* 严禁使用 eval() 或 exec() 危险动态执行函数！
 
 ### Synthesized Agent Skills & Defensive Standards
 #### Skill 1: 防御性可选链与空指针安全防护规范
@@ -264,4 +266,18 @@ app.add_middleware(CORSMiddleware,
 - [ ] 所有 `execSync` 改 `execFileSync` 数组参数
 - [ ] 所有 `db.get` 都有 `or {}` 防御
 - [ ] 所有 bypass 都有审计日志
+
+
+#### Skill 3: 杜绝危险动态执行与代码注入防御规范
+**Summary:** 严禁在业务逻辑中调用 eval()、exec() 或未参数化的 SQL 字符串拼接，消除远程代码执行（RCE）与注入风险。
+
+# Skill: Secure Execution & Injection Prevention
+
+## Context
+Prevent security vulnerabilities arising from untrusted input execution or unsanitized database queries.
+
+## Guidelines for AI Coding Assistants
+1. Never recommend or generate `eval()`, `exec()`, `Function()`, or `setTimeout` with string arguments.
+2. Always use parameterized queries or ORM query builders (e.g. Prisma, Drizzle, SQLAlchemy) for database interactions.
+3. Validate all incoming payload schemas with Zod, Joi, or Pydantic.
 <!-- FLOWDEV_AI_RULES_END -->
