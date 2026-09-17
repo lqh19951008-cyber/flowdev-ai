@@ -87,8 +87,9 @@ class ProjectGatePolicy:
         self.test_framework: str = "pytest"
         self.sandbox_timeout_sec: float = 5.0
 
-        # Gatekeeper action & notifier
-        self.failure_action: str = "block_commit"  # "block_commit", "warn_only", "create_review_pr"
+        # Gatekeeper master switch & action & notifier
+        self.gate_enabled: bool = True
+        self.failure_action: str = "block_commit"  # "block_commit", "warn_only", "disabled", "create_review_pr"
         self.notify_channel: str = "feishu"  # "feishu", "none"
 
         # Custom learned rules & Agent skills
@@ -107,6 +108,18 @@ class ProjectGatePolicy:
                 return
         if not isinstance(raw_policy, dict):
             return
+
+        # Master switch and failure action root overrides
+        if "gate_enabled" in raw_policy:
+            self.gate_enabled = bool(raw_policy["gate_enabled"])
+        if "enabled" in raw_policy:
+            self.gate_enabled = bool(raw_policy["enabled"])
+        if "failure_action" in raw_policy:
+            self.failure_action = str(raw_policy["failure_action"])
+        elif "failureAction" in raw_policy:
+            self.failure_action = str(raw_policy["failureAction"])
+        if self.failure_action == "disabled":
+            self.gate_enabled = False
 
         # 0. Custom learned rules & Agent skills
         if isinstance(raw_policy.get("custom_rules"), list):
@@ -214,6 +227,19 @@ class CliScanner:
             f"failure_action={policy.failure_action}, "
             f"notify_channel={policy.notify_channel}"
         )
+
+        # Check if gatekeeper is disabled for this project
+        if not policy.gate_enabled or policy.failure_action == "disabled":
+            logger.info(f"Gatekeeper is disabled for project '{project_id}', bypassing review immediately.")
+            return CliScanResponse(
+                passed=True,
+                critical_issues=[],
+                suggestions=[],
+                summary="门禁已处于关闭状态（项目配置为放行模式），快速放行本次提交。",
+                project_id=project_id,
+                committer=committer,
+                file_results=[],
+            )
 
         critical_issues: List[str] = []
         suggestions: List[str] = []

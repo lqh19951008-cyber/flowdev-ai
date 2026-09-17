@@ -50,10 +50,21 @@ export function RuleEvolutionModal({
   const [libRules, setLibRules] = useState<CustomGateRule[]>([]);
   const [libSkills, setLibSkills] = useState<AgentSkillItem[]>([]);
   const [libLoading, setLibLoading] = useState(false);
+  const [serverUrl, setServerUrl] = useState("http://127.0.0.1:8000");
 
   // Fetch or synthesize when opened
   useEffect(() => {
     if (!isOpen) return;
+
+    if (typeof window !== "undefined") {
+      const currentHost = window.location.hostname;
+      const protocol = window.location.protocol;
+      if (currentHost === "localhost" || currentHost === "127.0.0.1") {
+        setServerUrl("http://127.0.0.1:8000");
+      } else {
+        setServerUrl(`${protocol}//${window.location.host}`);
+      }
+    }
 
     if (scanEvent) {
       setActiveTab("evolve");
@@ -181,6 +192,26 @@ export function RuleEvolutionModal({
     link.download = filename;
     link.click();
     URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadFormat = async (format: "cursorrules" | "claude_md" | "copilot" | "windsurf") => {
+    try {
+      const res = await fetch(`http://127.0.0.1:8000/api/projects/${encodeURIComponent(targetProjectId)}/skills/export?format=${format}`);
+      if (res.ok) {
+        const text = await res.text();
+        const filename =
+          format === "cursorrules"
+            ? ".cursorrules"
+            : format === "claude_md"
+            ? "CLAUDE.md"
+            : format === "copilot"
+            ? "copilot-instructions.md"
+            : ".windsurfrules";
+        handleDownloadCursorRules(text, filename);
+      }
+    } catch (e) {
+      console.error("Failed to export skills", e);
+    }
   };
 
   if (!isOpen) return null;
@@ -465,6 +496,94 @@ export function RuleEvolutionModal({
                       <span>一键导出全部 Skill (.cursorrules)</span>
                     </button>
                   )}
+                </div>
+              </div>
+
+              {/* Developer Skill Usage & Consumption Guide */}
+              <div className="p-4 rounded-xl border border-indigo-200/80 dark:border-indigo-900/50 bg-gradient-to-br from-indigo-50/60 via-white to-indigo-50/20 dark:from-indigo-950/30 dark:via-slate-900 dark:to-slate-900/50 space-y-3 shadow-sm">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-indigo-600 dark:text-indigo-400 animate-pulse" />
+                    <span className="text-xs font-bold text-indigo-950 dark:text-indigo-200">
+                      💡 开发者如何在项目中使用这些已沉淀的 Skill？
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-indigo-600 dark:text-indigo-400 font-mono">
+                    原生适配 Cursor / Copilot / Claude Code / Windsurf
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                  <div className="p-3 rounded-lg bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 space-y-2">
+                    <div className="font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                      <Terminal className="h-3.5 w-3.5 text-cyan-500" />
+                      <span>方式 1：终端一行命令拉取 (任何外部项目通用 · 零文件依赖)</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 leading-relaxed">
+                      外部项目无需包含任何本地脚本，直接使用系统自带的 <code className="text-cyan-600 font-mono">curl</code> 一行写入规范：
+                    </p>
+                    <div className="flex items-center justify-between p-2 rounded bg-slate-900 text-slate-200 font-mono text-[10.5px]">
+                      <code className="break-all">{`curl -s ${serverUrl}/api/projects/${targetProjectId}/skills/export -o .cursorrules`}</code>
+                      <button
+                        onClick={() => handleCopy(`curl -s ${serverUrl}/api/projects/${targetProjectId}/skills/export -o .cursorrules`, "cmd-curl")}
+                        className="text-slate-400 hover:text-white transition-colors ml-2 shrink-0"
+                        title="复制命令"
+                      >
+                        {copiedKey === "cmd-curl" ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+                      </button>
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      * 若该项目已按指引安装了 Git 门禁，亦可直接运行: <code className="text-indigo-400 font-mono">node .git/hooks/pre-commit --sync-skills</code>
+                    </div>
+                  </div>
+
+                  <div className="p-3 rounded-lg bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 space-y-2">
+                    <div className="font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                      <FolderGit2 className="h-3.5 w-3.5 text-indigo-500" />
+                      <span>方式 2：提交入库全员自动生效 (Team Git Sync)</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 leading-relaxed">
+                      将拉取或下载的 <code className="text-indigo-600 font-mono">.cursorrules</code> 提交至仓库 Git 版本控制：
+                    </p>
+                    <div className="p-2 rounded bg-slate-100 dark:bg-slate-800/60 text-slate-700 dark:text-slate-300 font-mono text-[11px] leading-relaxed">
+                      <code>git add .cursorrules &amp;&amp; git commit -m &quot;chore: 沉淀团队 AI 规范&quot;</code>
+                    </div>
+                    <p className="text-[10.5px] text-emerald-600 dark:text-emerald-400 font-medium">
+                      ✓ 团队其他成员执行 <code>git pull</code> 后，无需任何配置，本地 Cursor / Copilot 全员自动生效！
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 pt-1 flex-wrap">
+                  <span className="text-[11px] text-slate-500 font-medium">快速按需下载规范文件:</span>
+                  <button
+                    onClick={() => handleDownloadFormat("cursorrules")}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 text-slate-700 dark:text-slate-200 transition-all shadow-xs cursor-pointer"
+                  >
+                    <Download className="h-3 w-3 text-indigo-500" />
+                    <span>.cursorrules (Cursor)</span>
+                  </button>
+                  <button
+                    onClick={() => handleDownloadFormat("claude_md")}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 text-slate-700 dark:text-slate-200 transition-all shadow-xs cursor-pointer"
+                  >
+                    <Download className="h-3 w-3 text-amber-500" />
+                    <span>CLAUDE.md (Claude Code)</span>
+                  </button>
+                  <button
+                    onClick={() => handleDownloadFormat("copilot")}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 text-slate-700 dark:text-slate-200 transition-all shadow-xs cursor-pointer"
+                  >
+                    <Download className="h-3 w-3 text-blue-500" />
+                    <span>copilot-instructions.md (Copilot)</span>
+                  </button>
+                  <button
+                    onClick={() => handleDownloadFormat("windsurf")}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 text-slate-700 dark:text-slate-200 transition-all shadow-xs cursor-pointer"
+                  >
+                    <Download className="h-3 w-3 text-teal-500" />
+                    <span>.windsurfrules (Windsurf)</span>
+                  </button>
                 </div>
               </div>
 

@@ -128,6 +128,7 @@ interface FlowState {
   setSelectedProjectId: (id: string) => void;
   setProjects: (projects: ProjectItem[]) => void;
   fetchProjects: () => Promise<void>;
+  updateProjectGateMode: (projectId: string, mode: "block_commit" | "warn_only" | "disabled") => Promise<void>;
   fetchRecentEvents: (projectId?: string) => Promise<void>;
   addLiveEvent: (event: ScanEventItem) => void;
   markEventAsRead: (id: string) => void;
@@ -646,6 +647,31 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       }
     } catch (e) {
       console.warn("Failed to fetch projects", e);
+    }
+  },
+
+  updateProjectGateMode: async (projectId: string, mode: "block_commit" | "warn_only" | "disabled") => {
+    try {
+      // Optimistically update local project state immediately
+      set((state) => ({
+        projects: state.projects.map((p) =>
+          p.id === projectId
+            ? {
+                ...p,
+                gate_enabled: mode !== "disabled",
+                failure_action: mode,
+              }
+            : p
+        ),
+      }));
+
+      await fetch(`http://127.0.0.1:8000/api/projects/${encodeURIComponent(projectId)}/gate-mode`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
+      });
+    } catch (e) {
+      console.error("Failed to update project gate mode", e);
     }
   },
 

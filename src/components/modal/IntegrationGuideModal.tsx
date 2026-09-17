@@ -57,15 +57,15 @@ export function IntegrationGuideModal({
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
-  const gitHookScriptCmd = `# 1. 在你的项目根目录下，配置 FlowDev 线上服务地址
-export FLOWDEV_SERVER_URL="${serverUrl}"
+  const gitHookScriptCmd = `# 1. 一键将探针接入当前 Git 仓库
+curl -s "${serverUrl}/scripts/flowdev-hook.js" -o .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
 
-# 2. 安装门禁探针到当前项目的 .git/hooks/pre-commit
-node scripts/install-hook.js
-
-# 3. 验证接入：执行提交，触发智能门禁审查与卡点
-git add .
-git commit -m "test: verify flowdev gate"`;
+# 2. ⚡ 门禁控制开关 (随需切换，绝不阻断开发速度)：
+node .git/hooks/pre-commit --warn    # 切换为「仅提示不拦截」模式（推荐！AI照常给建议，但100%放行）
+node .git/hooks/pre-commit --disable # 临时彻底关闭门禁（秒级直接提交）
+node .git/hooks/pre-commit --enable  # 恢复严格卡点
+git commit -m "..." --no-verify     # Git 原生单次跳过通行证`;
 
   const huskyScriptCmd = `# 1. 安装与初始化 Husky (全团队成员克隆后自动生效)
 npm install --save-dev husky

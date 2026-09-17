@@ -183,6 +183,8 @@ export interface ProjectItem {
   name: string;
   description: string;
   policy: Record<string, unknown>;
+  gate_enabled?: boolean;
+  failure_action?: "block_commit" | "warn_only" | "disabled" | string;
   total_scans: number;
   passed_scans: number;
   pass_rate: number;

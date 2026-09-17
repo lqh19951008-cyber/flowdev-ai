@@ -24,7 +24,7 @@ if hasattr(sys.stderr, "reconfigure"):
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, PlainTextResponse
 
 from pathlib import Path
 from config import settings
@@ -35,7 +35,7 @@ from cli_scanner import CliScanRequest, CliScanResponse, CliScanner
 from database import DatabaseService
 from event_bus import EventBus
 from ai_service import LLMService
-from agents import extract_code_block
+from agents import extract_code_block, extract_json_object
 
 # Configure dual logging: console + backend/flowdev.log
 LOG_FILE = Path(__file__).parent / "flowdev.log"
@@ -171,6 +171,52 @@ async def update_project_policy(project_id: str, policy: dict):
     return {"success": success, "project_id": project_id}
 
 
+@app.put("/api/projects/{project_id}/gate-mode")
+async def set_project_gate_mode(project_id: str, payload: dict):
+    """Convenient endpoint to switch gatekeeper mode for a project.
+    
+    Modes:
+    - block_commit (or block): Strict gatekeeper, blocks commit on critical issues.
+    - warn_only (or warn): Runs AI review & suggestions, but 100% allows commit (never blocks!).
+    - disabled (or off): Completely bypasses review for lightning-fast commits.
+    """
+    mode = payload.get("mode", "block_commit")
+    if mode in ("block", "block_commit"):
+        failure_action = "block_commit"
+        gate_enabled = True
+    elif mode in ("warn", "warn_only"):
+        failure_action = "warn_only"
+        gate_enabled = True
+    elif mode in ("disabled", "off", "bypass"):
+        failure_action = "disabled"
+        gate_enabled = False
+    else:
+        failure_action = "block_commit"
+        gate_enabled = True
+
+    policy = DatabaseService.get_project_policy(project_id) or {}
+    policy["gate_enabled"] = gate_enabled
+    policy["failure_action"] = failure_action
+    policy["failureAction"] = failure_action
+
+    # If policy has nodes, update diff_export node config as well
+    if "nodes" in policy and isinstance(policy["nodes"], list):
+        for node in policy["nodes"]:
+            if node.get("type") == "diff_export":
+                if "data" in node and isinstance(node["data"], dict) and "config" in node["data"]:
+                    node["data"]["config"]["failureAction"] = failure_action
+                elif "config" in node and isinstance(node["config"], dict):
+                    node["config"]["failureAction"] = failure_action
+
+    success = DatabaseService.update_project_policy(project_id, policy)
+    return {
+        "success": success,
+        "project_id": project_id,
+        "mode": failure_action,
+        "gate_enabled": gate_enabled,
+    }
+
+
 @app.post("/api/rules/synthesize")
 async def synthesize_rule_and_skill(payload: dict):
     """Synthesizes an IDE Agent Skill and Gatekeeper Rule from intercepted code defects.
@@ -233,11 +279,9 @@ async def synthesize_rule_and_skill(payload: dict):
             async for token in LLMService.stream_chat(messages, temperature=0.2):
                 chunks.append(token)
             full_response = "".join(chunks)
-            json_str = extract_code_block(full_response, "json")
-            if json_str:
-                data = json.loads(json_str)
-                if isinstance(data, dict) and "title" in data and "good_snippet" in data:
-                    return data
+            data = extract_json_object(full_response)
+            if isinstance(data, dict) and "title" in data and "good_snippet" in data:
+                return data
         except Exception as err:
             logger.warning(f"LLM rule synthesis failed, falling back to heuristic engine: {err}")
 
@@ -382,6 +426,121 @@ async def delete_project_rule(project_id: str, payload: dict):
     }
 
 
+@app.get("/api/projects/{project_id}/skills/export")
+async def export_project_skills(
+    project_id: str,
+    format: str = "cursorrules",
+    incremental: bool = False,
+):
+    """Exports synthesized skills and quality rules for IDE AI agents (Cursor, Claude, Copilot, Windsurf).
+    
+    Supported formats:
+    - cursorrules: .cursorrules Markdown format
+    - cursor_mdc: .cursor/rules/flowdev-guards.mdc modular format (preserves existing .cursorrules completely!)
+    - claude_md: CLAUDE.md guidelines format
+    - copilot: .github/copilot-instructions.md format
+    - windsurf: .windsurfrules format
+    - json: Full JSON payload containing all rules and metadata
+    """
+    policy = DatabaseService.get_project_policy(project_id) or {}
+    custom_rules = policy.get("custom_rules", [])
+    agent_skills = policy.get("agent_skills", [])
+
+    if format == "json":
+        return {
+            "project_id": project_id,
+            "custom_rules": custom_rules,
+            "agent_skills": agent_skills,
+            "count": len(agent_skills),
+        }
+
+    lines = []
+
+    # Cursor 0.40+ Modular Rule format (.cursor/rules/*.mdc)
+    if format == "cursor_mdc":
+        lines.extend([
+            "---",
+            f"description: FlowDev-AI Code Quality & Gatekeeper Standards for {project_id}",
+            "globs: **/*",
+            "alwaysApply: true",
+            "---",
+            "",
+            f"# FlowDev-AI Quality Standards & Agent Skills ({project_id})",
+            "> Automatically synthesized and maintained by FlowDev-AI Gatekeeper.",
+            "> Independent modular rule: does not conflict with existing .cursorrules.",
+            "",
+        ])
+    else:
+        tool_title = (
+            "Cursor AI Rules (.cursorrules)" if format == "cursorrules" else
+            "Claude Code Guidelines (CLAUDE.md)" if format == "claude_md" else
+            "GitHub Copilot Instructions (.github/copilot-instructions.md)" if format == "copilot" else
+            "Windsurf Rules (.windsurfrules)"
+        )
+
+        if incremental:
+            lines.extend([
+                "<!-- FLOWDEV_AI_RULES_START -->",
+                f"## FlowDev-AI Defensive Quality Standards ({project_id})",
+                "> Automatically managed by FlowDev-AI. You may append this block to your existing configuration.",
+                "",
+            ])
+        else:
+            lines.extend([
+                f"# {project_id} - Code Quality Standards & Agent Skills",
+                f"> Automatically synthesized and maintained by FlowDev-AI Pre-Commit Gatekeeper.",
+                f"> Target Spec: {tool_title}",
+                "",
+                "## General Instructions",
+                f"You are the AI coding companion working on repository '{project_id}'.",
+                "You must strictly adhere to the following quality standards and learned architectural constraints.",
+                "Under no circumstances should you generate code that violates these rules.",
+                "",
+            ])
+
+    if custom_rules:
+        lines.append("### Pre-Commit Quality Gate Regex Constraints")
+        lines.append("The repository gatekeeper actively blocks commits violating these regex patterns:")
+        for r in custom_rules:
+            lines.append(f"- **{r.get('title', 'Rule')}**: `{r.get('pattern', '')}`")
+            if r.get("message"):
+                lines.append(f"  *Reason:* {r.get('message')}")
+        lines.append("")
+
+    if agent_skills:
+        lines.append("### Synthesized Agent Skills & Defensive Standards")
+        for idx, skill in enumerate(agent_skills, 1):
+            lines.append(f"#### Skill {idx}: {skill.get('title', 'Defensive Standard')}")
+            lines.append(f"**Summary:** {skill.get('summary', '')}")
+            lines.append("")
+            if skill.get("markdown"):
+                lines.append(skill.get("markdown"))
+                lines.append("")
+    else:
+        lines.append("#### Default Stability Guard")
+        lines.append("- Always perform defensive null checks (`?.`, `??`).")
+        lines.append("- Never use dangerous dynamic execution functions like `eval()`.")
+        lines.append("- Keep all credentials and tokens in environment variables.")
+
+    if incremental and format != "cursor_mdc":
+        lines.append("<!-- FLOWDEV_AI_RULES_END -->")
+
+    content = "\n".join(lines)
+    return PlainTextResponse(content=content, media_type="text/markdown; charset=utf-8")
+
+
+@app.get("/scripts/flowdev-hook.js")
+async def get_hook_script():
+    """Returns the standalone Node.js pre-commit hook script for any external project."""
+    hook_file = Path(__file__).parent.parent / "scripts" / "flowdev-hook.js"
+    if not hook_file.exists():
+        hook_file = Path("scripts/flowdev-hook.js")
+    if hook_file.exists():
+        content = hook_file.read_text(encoding="utf-8")
+        return PlainTextResponse(content=content, media_type="application/javascript; charset=utf-8")
+    return PlainTextResponse(content="// flowdev hook not found", status_code=404)
+
+
 @app.get("/api/events/stream")
 async def stream_events():
     """SSE endpoint broadcasting real-time commit scan events to Web dashboards."""
@@ -440,7 +599,9 @@ async def update_feishu_config(payload: dict):
 
 @app.get("/api/llm/status")
 async def get_llm_status():
-    """Returns the current LLM API configuration status."""
+    """Returns the current LLM API configuration status and active profile."""
+    from database import DatabaseService
+    active_profile = DatabaseService.get_active_llm_profile()
     masked_key = ""
     if settings.OPENAI_API_KEY:
         if len(settings.OPENAI_API_KEY) > 8:
@@ -454,35 +615,208 @@ async def get_llm_status():
         "masked_key": masked_key,
         "has_api_key": settings.has_api_key,
         "request_timeout": settings.REQUEST_TIMEOUT,
+        "active_profile": active_profile,
+    }
+
+
+@app.get("/api/llm/profiles")
+async def list_llm_profiles():
+    """Returns all configured LLM profiles with active state."""
+    from database import DatabaseService
+    profiles = DatabaseService.list_llm_profiles()
+    active_profile = DatabaseService.get_active_llm_profile()
+    return {
+        "profiles": profiles,
+        "active_profile_id": active_profile["id"] if active_profile else None,
+        "total": len(profiles),
+    }
+
+
+@app.post("/api/llm/profiles")
+async def create_llm_profile(payload: dict):
+    """Creates a new LLM connection profile (always succeeds, even if offline or unverified)."""
+    from database import DatabaseService
+    from config import save_env_updates
+
+    name = str(payload.get("name") or "未命名连接").strip()
+    api_base = str(payload.get("api_base") or "https://api.openai.com/v1").strip()
+    api_key_val = payload.get("api_keys") if payload.get("api_keys") is not None else payload.get("api_key", "")
+    default_model = str(payload.get("default_model") or "deepseek-chat").strip()
+    
+    try:
+        request_timeout = float(payload.get("request_timeout", 60.0))
+    except (ValueError, TypeError):
+        request_timeout = 60.0
+
+    provider_type = str(payload.get("provider_type") or "custom").strip()
+    set_active = bool(payload.get("set_active", False))
+
+    profile = DatabaseService.create_llm_profile(
+        name=name,
+        api_base=api_base,
+        api_key=api_key_val,
+        default_model=default_model,
+        request_timeout=request_timeout,
+        provider_type=provider_type,
+        set_active=set_active,
+    )
+
+    if set_active and profile:
+        settings.OPENAI_API_BASE = profile["api_base"]
+        settings.OPENAI_API_KEY = profile.get("api_key", "")
+        settings.DEFAULT_MODEL = profile["default_model"]
+        settings.REQUEST_TIMEOUT = profile["request_timeout"]
+        save_env_updates({
+            "OPENAI_API_BASE": settings.OPENAI_API_BASE,
+            "OPENAI_API_KEY": settings.OPENAI_API_KEY,
+            "DEFAULT_MODEL": settings.DEFAULT_MODEL,
+            "REQUEST_TIMEOUT": str(settings.REQUEST_TIMEOUT),
+        })
+
+    return {
+        "success": True,
+        "profile": profile,
+        "profiles": DatabaseService.list_llm_profiles(),
+        "active_profile_id": DatabaseService.get_active_llm_profile()["id"] if DatabaseService.get_active_llm_profile() else None,
+        "message": f"成功保存连接「{name}」！",
+    }
+
+
+@app.put("/api/llm/profiles/{profile_id}")
+async def update_llm_profile(profile_id: str, payload: dict):
+    """Updates an existing LLM connection profile."""
+    from database import DatabaseService
+    from config import save_env_updates
+
+    profile = DatabaseService.update_llm_profile(profile_id, payload)
+    if not profile:
+        # If profile doesn't exist, create it gracefully
+        profile = DatabaseService.create_llm_profile(
+            name=str(payload.get("name") or "自定义连接"),
+            api_base=str(payload.get("api_base") or "https://api.openai.com/v1"),
+            api_key=str(payload.get("api_key") or ""),
+            default_model=str(payload.get("default_model") or "deepseek-chat"),
+            provider_type=str(payload.get("provider_type") or "custom"),
+        )
+
+    # If this profile is active, sync to runtime settings and .env
+    if profile and profile.get("is_active"):
+        settings.OPENAI_API_BASE = profile["api_base"]
+        if "api_key" in payload:
+            key = str(payload["api_key"]).strip()
+            if not ("..." in key and len(key) < 15):
+                settings.OPENAI_API_KEY = key
+        settings.DEFAULT_MODEL = profile["default_model"]
+        settings.REQUEST_TIMEOUT = profile["request_timeout"]
+        save_env_updates({
+            "OPENAI_API_BASE": settings.OPENAI_API_BASE,
+            "OPENAI_API_KEY": settings.OPENAI_API_KEY,
+            "DEFAULT_MODEL": settings.DEFAULT_MODEL,
+            "REQUEST_TIMEOUT": str(settings.REQUEST_TIMEOUT),
+        })
+
+    return {
+        "success": True,
+        "profile": profile,
+        "profiles": DatabaseService.list_llm_profiles(),
+        "active_profile_id": DatabaseService.get_active_llm_profile()["id"] if DatabaseService.get_active_llm_profile() else None,
+        "message": f"成功更新连接配置！",
+    }
+
+
+@app.post("/api/llm/profiles/{profile_id}/activate")
+async def activate_llm_profile(profile_id: str):
+    """Activates a specific LLM profile and updates backend runtime immediately."""
+    from database import DatabaseService
+    from config import save_env_updates
+
+    profile = DatabaseService.set_active_llm_profile(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    # Sync to runtime settings and .env
+    settings.OPENAI_API_BASE = profile["api_base"]
+    settings.OPENAI_API_KEY = profile.get("api_key", "")
+    settings.DEFAULT_MODEL = profile["default_model"]
+    settings.REQUEST_TIMEOUT = float(profile.get("request_timeout", 60.0))
+
+    save_env_updates({
+        "OPENAI_API_BASE": settings.OPENAI_API_BASE,
+        "OPENAI_API_KEY": settings.OPENAI_API_KEY,
+        "DEFAULT_MODEL": settings.DEFAULT_MODEL,
+        "REQUEST_TIMEOUT": str(settings.REQUEST_TIMEOUT),
+    })
+
+    return {
+        "success": True,
+        "active_profile": profile,
+        "profiles": DatabaseService.list_llm_profiles(),
+        "configured": settings.has_api_key,
+        "message": f"已成功切换为「{profile['name']}」连接！",
+    }
+
+
+@app.delete("/api/llm/profiles/{profile_id}")
+async def delete_llm_profile(profile_id: str):
+    """Deletes an LLM profile."""
+    from database import DatabaseService
+    from config import save_env_updates
+
+    DatabaseService.delete_llm_profile(profile_id)
+    active_profile = DatabaseService.get_active_llm_profile()
+
+    if active_profile:
+        settings.OPENAI_API_BASE = active_profile["api_base"]
+        settings.OPENAI_API_KEY = active_profile.get("api_key", "")
+        settings.DEFAULT_MODEL = active_profile["default_model"]
+        settings.REQUEST_TIMEOUT = float(active_profile.get("request_timeout", 60.0))
+        save_env_updates({
+            "OPENAI_API_BASE": settings.OPENAI_API_BASE,
+            "OPENAI_API_KEY": settings.OPENAI_API_KEY,
+            "DEFAULT_MODEL": settings.DEFAULT_MODEL,
+            "REQUEST_TIMEOUT": str(settings.REQUEST_TIMEOUT),
+        })
+
+    return {
+        "success": True,
+        "profiles": DatabaseService.list_llm_profiles(),
+        "active_profile": active_profile,
     }
 
 
 @app.post("/api/llm/test")
 async def test_llm_connection(payload: dict = None):
-    """Tests the LLM connection with given or current settings."""
+    """Tests the LLM connection with given settings or specified profile (supports multi-key verification)."""
+    from database import DatabaseService, parse_api_keys, mask_key
     import httpx
     payload = payload or {}
-    api_key = payload.get("api_key", "").strip()
-    # If not provided or masked placeholder, use current key
-    if not api_key or "..." in api_key:
-        api_key = settings.OPENAI_API_KEY
-    api_base = (payload.get("api_base", "").strip() or settings.OPENAI_API_BASE).rstrip("/")
-    model = payload.get("model", "").strip() or payload.get("default_model", "").strip() or settings.DEFAULT_MODEL
 
-    if not api_key:
+    profile_id = payload.get("profile_id")
+    if profile_id:
+        profile = DatabaseService.get_llm_profile(profile_id)
+        if profile:
+            api_key = profile.get("api_key", "").strip()
+            api_base = profile.get("api_base", "").strip().rstrip("/")
+            model = profile.get("default_model", "").strip()
+        else:
+            return {"success": False, "message": "指定的连接配置不存在"}
+    else:
+        api_key = payload.get("api_key") or payload.get("api_keys") or ""
+        # If not provided or masked placeholder, use current key
+        if not api_key or (isinstance(api_key, str) and "..." in api_key):
+            api_key = settings.OPENAI_API_KEY
+        api_base = (payload.get("api_base", "").strip() or settings.OPENAI_API_BASE).rstrip("/")
+        model = payload.get("model", "").strip() or payload.get("default_model", "").strip() or settings.DEFAULT_MODEL
+
+    keys = parse_api_keys(api_key)
+    if not keys:
         return {
             "success": False,
-            "message": "请先配置 API Key 再进行连通性测试！",
+            "message": "请先添加至少一个 API Key / Token 再进行连通性测试！",
             "model": model,
         }
 
-    auth_token = api_key.strip()
-    auth_header = auth_token if auth_token.lower().startswith("bearer ") else f"Bearer {auth_token}"
     endpoint = f"{api_base}/chat/completions"
-    headers = {
-        "Authorization": auth_header,
-        "Content-Type": "application/json",
-    }
     test_body = {
         "model": model,
         "messages": [{"role": "user", "content": "Hi, reply with 'pong'"}],
@@ -490,42 +824,61 @@ async def test_llm_connection(payload: dict = None):
         "temperature": 0.1,
     }
 
+    success_keys = []
+    failed_keys = []
 
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(endpoint, headers=headers, json=test_body)
-            if resp.status_code == 200:
-                data = resp.json()
-                reply = ""
-                choices = data.get("choices", [])
-                if choices:
-                    reply = choices[0].get("message", {}).get("content", "").strip()
-                return {
-                    "success": True,
-                    "message": f"连接成功！模型响应: {reply or 'pong'}",
-                    "model": model,
-                    "status_code": resp.status_code,
-                }
-            else:
-                err_text = resp.text[:200]
-                return {
-                    "success": False,
-                    "message": f"连接失败 (HTTP {resp.status_code}): {err_text}",
-                    "model": model,
-                    "status_code": resp.status_code,
-                }
-    except Exception as e:
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        for idx, key in enumerate(keys):
+            auth_token = key.strip()
+            auth_header = auth_token if auth_token.lower().startswith("bearer ") else f"Bearer {auth_token}"
+            headers = {
+                "Authorization": auth_header,
+                "Content-Type": "application/json",
+            }
+            try:
+                resp = await client.post(endpoint, headers=headers, json=test_body)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    reply = ""
+                    choices = data.get("choices", [])
+                    if choices:
+                        reply = choices[0].get("message", {}).get("content", "").strip()
+                    success_keys.append((key, reply or "pong"))
+                else:
+                    err_text = resp.text[:120]
+                    failed_keys.append((key, f"HTTP {resp.status_code}: {err_text}"))
+            except Exception as e:
+                failed_keys.append((key, str(e)))
+
+    if success_keys:
+        sample_reply = success_keys[0][1]
+        if len(keys) == 1:
+            msg = f"连接成功！模型响应: {sample_reply}"
+        else:
+            msg = f"多Key测试完成：{len(success_keys)}/{len(keys)} 个 Key 连通有效！响应: {sample_reply}"
+        return {
+            "success": True,
+            "message": msg,
+            "model": model,
+            "total_keys": len(keys),
+            "valid_keys_count": len(success_keys),
+        }
+    else:
+        err_detail = failed_keys[0][1] if failed_keys else "网络或认证异常"
         return {
             "success": False,
-            "message": f"请求异常: {str(e)}",
+            "message": f"连接失败 (共测试 {len(keys)} 个 Key 均未连通): {err_detail}",
             "model": model,
+            "total_keys": len(keys),
+            "valid_keys_count": 0,
         }
 
 
 @app.post("/api/llm/config")
 async def update_llm_config(payload: dict):
-    """Updates the LLM configuration."""
+    """Updates the LLM configuration (legacy compat)."""
     from config import save_env_updates
+    from database import DatabaseService
     updates = {}
 
     if "api_base" in payload and payload["api_base"]:
@@ -556,6 +909,15 @@ async def update_llm_config(payload: dict):
     if updates:
         save_env_updates(updates)
 
+    active_profile = DatabaseService.get_active_llm_profile()
+    if active_profile:
+        DatabaseService.update_llm_profile(active_profile["id"], {
+            "api_base": settings.OPENAI_API_BASE,
+            "api_key": settings.OPENAI_API_KEY,
+            "default_model": settings.DEFAULT_MODEL,
+            "request_timeout": settings.REQUEST_TIMEOUT,
+        })
+
     masked_key = ""
     if settings.OPENAI_API_KEY:
         if len(settings.OPENAI_API_KEY) > 8:
@@ -572,6 +934,7 @@ async def update_llm_config(payload: dict):
         "has_api_key": settings.has_api_key,
         "request_timeout": settings.REQUEST_TIMEOUT,
     }
+
 
 
 if __name__ == "__main__":

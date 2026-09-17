@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 from typing import AsyncGenerator, Dict, List, Optional
 import httpx
 
@@ -26,17 +27,11 @@ class LLMService:
         Falls back to intelligent contextual simulation if API key is not configured or fails.
         """
         use_model = model or settings.DEFAULT_MODEL
+        keys = [k.strip() for k in re.split(r'[\r\n,;]+', settings.OPENAI_API_KEY) if k.strip()]
 
-        if settings.has_api_key:
-            auth_token = settings.OPENAI_API_KEY.strip()
-            auth_header = auth_token if auth_token.lower().startswith("bearer ") else f"Bearer {auth_token}"
+        if keys:
             base_url = settings.OPENAI_API_BASE.rstrip("/")
             endpoint = f"{base_url}/chat/completions"
-            headers = {
-                "Authorization": auth_header,
-                "Content-Type": "application/json",
-            }
-
             body = {
                 "model": use_model,
                 "messages": messages,
@@ -44,39 +39,52 @@ class LLMService:
                 "stream": True,
             }
 
-            try:
-                async with httpx.AsyncClient(timeout=settings.REQUEST_TIMEOUT) as client:
-                    async with client.stream("POST", endpoint, headers=headers, json=body) as response:
-                        if response.status_code != 200:
-                            err_body = await response.aread()
-                            logger.error(f"LLM API returned status {response.status_code}: {err_body.decode('utf-8', errors='ignore')}")
-                            # Yield error notice and fallback to simulation
-                            yield f"\n> [系统提示: 真实接口返回 HTTP {response.status_code}，正在无缝切换为智能自适应生成]\n\n"
-                            async for token in cls._simulate_stream(messages):
-                                yield token
-                            return
+            for idx, key in enumerate(keys):
+                auth_token = key.strip()
+                auth_header = auth_token if auth_token.lower().startswith("bearer ") else f"Bearer {auth_token}"
+                headers = {
+                    "Authorization": auth_header,
+                    "Content-Type": "application/json",
+                }
 
-                        async for line in response.aiter_lines():
-                            line = line.strip()
-                            if not line or line.startswith(":"):
-                                continue
+                try:
+                    async with httpx.AsyncClient(timeout=settings.REQUEST_TIMEOUT) as client:
+                        async with client.stream("POST", endpoint, headers=headers, json=body) as response:
+                            if response.status_code != 200:
+                                err_body = await response.aread()
+                                logger.warning(f"Key {idx+1}/{len(keys)} returned {response.status_code}: {err_body.decode('utf-8', errors='ignore')}")
+                                if idx < len(keys) - 1:
+                                    continue  # Try next key in pool
+                                else:
+                                    yield f"\n> [系统提示: 真实接口返回 HTTP {response.status_code}，已自动无缝切换为自闭环演练引擎]\n\n"
+                                    async for token in cls._simulate_stream(messages):
+                                        yield token
+                                    return
 
-                            if line.startswith("data: "):
-                                data_str = line[6:].strip()
-                                if data_str == "[DONE]":
-                                    break
-                                try:
-                                    data_json = json.loads(data_str)
-                                    choices = data_json.get("choices", [])
-                                    if choices:
-                                        delta = choices[0].get("delta", {})
-                                        content = delta.get("content", "")
-                                        if content:
-                                            yield content
-                                except json.JSONDecodeError:
+                            async for line in response.aiter_lines():
+                                line = line.strip()
+                                if not line or line.startswith(":"):
                                     continue
-                return
-            except Exception as e:
+
+                                if line.startswith("data: "):
+                                    data_str = line[6:].strip()
+                                    if data_str == "[DONE]":
+                                        break
+                                    try:
+                                        data_json = json.loads(data_str)
+                                        choices = data_json.get("choices", [])
+                                        if choices:
+                                            delta = choices[0].get("delta", {})
+                                            content = delta.get("content", "")
+                                            if content:
+                                                yield content
+                                    except json.JSONDecodeError:
+                                        continue
+                    return
+                except Exception as e:
+                    logger.warning(f"Key {idx+1}/{len(keys)} connection error: {e}")
+                    if idx < len(keys) - 1:
+                        continue  # Try next key in pool
                 logger.warning(f"Error calling LLM API ({e}), falling back to simulation.")
                 yield f"\n> [系统提示: 外部 API 连接异常 ({type(e).__name__})，已无缝切换为智能自适应引擎]\n\n"
 
@@ -90,17 +98,55 @@ class LLMService:
         user_content = messages[-1]["content"] if messages else ""
         system_content = messages[0]["content"] if len(messages) > 1 else ""
 
-        is_cli_scan = "PreCommitGatekeeper" in system_content or "门禁" in system_content
+        is_synth = "DevSecOps" in system_content or "规则/Skill" in system_content or "Skill进化" in system_content or "自闭环质量防护体系" in system_content
+        is_cli_scan = not is_synth and ("PreCommitGatekeeper" in system_content or "门禁" in system_content)
         is_review = "审查" in system_content or "ReviewAgent" in system_content or "审查" in user_content
         is_reflection = "反思" in user_content or "纠错" in user_content or "失败" in user_content
 
-        if is_cli_scan:
-            if "null." in user_content or "== null" in user_content or "= null" in user_content or "null" in user_content and "null.amount" in user_content:
+        # Dynamically extract context from user_content
+        file_match = re.search(r"(?:待提交文件|目标文件):\s*([^\r\n]+)", user_content)
+        current_file = file_match.group(1).strip() if file_match else ""
+
+        code_match = re.search(r"```(?:[a-zA-Z0-9_\-]+)?\n(.*?)```", user_content, re.DOTALL)
+        code_text = code_match.group(1) if code_match else user_content
+
+        chain_matches = re.findall(r"([a-zA-Z0-9_$]+\.[a-zA-Z0-9_$]+(?:\.[a-zA-Z0-9_$]+)?)", code_text)
+        filtered_chains = [
+            c for c in chain_matches
+            if not c.startswith(("console.", "Math.", "Object.", "Array.", "JSON.", "Promise.", "this.", "super.", "logger."))
+        ]
+        sample_var = filtered_chains[0] if filtered_chains else "data.item"
+        safe_var = sample_var.replace(".", "?.")
+
+        if is_synth:
+            target_file_disp = current_file or "业务核心模块"
+            sample_text = (
+                "```json\n"
+                "{\n"
+                f'  "title": "{target_file_disp} 防御性可选链与空值安全规范",\n'
+                '  "category": "stability",\n'
+                '  "severity": "critical",\n'
+                f'  "summary": "针对 {target_file_disp} 中潜在的未防御深层解构风险，强制实施可选链（?.）与空值合并运算符（??）防御。",\n'
+                f'  "bad_snippet": "// ❌ 危险反例：未判空直接访问深层属性，易导致运行时 TypeError 崩溃\\nconst val = {sample_var};",\n'
+                f'  "good_snippet": "// ✅ 规范正例：使用可选链与空值合并运算符进行安全防御与降级\\nconst val = {safe_var} ?? null;",\n'
+                f'  "skill_markdown": "# SKILL: {target_file_disp} 防御性编程准则\\n\\n## Context\\n在修改 {target_file_disp} 时必须遵循防御性编程规范。\\n\\n## Guidelines\\n1. 禁止对可能为空的对象直接链式调用深层属性。\\n2. 统一使用可选链 `?.` 与空值合并运算符 `??` 兜底。\\n",\n'
+                '  "gate_rule": {\n'
+                f'    "title": "{target_file_disp} 深层属性空安全卡点",\n'
+                '    "pattern": "\\\\b(null|undefined)\\\\.[a-zA-Z0-9_]+",\n'
+                '    "message": "检测到未防御的空指针直接引用，请使用可选链或显式判空！",\n'
+                '    "level": "critical"\n'
+                '  }\n'
+                "}\n"
+                "```"
+            )
+        elif is_cli_scan:
+            file_prefix = f"[{current_file}] " if current_file else ""
+            if "null" in user_content or "undefined" in user_content or "空指针" in user_content:
                 sample_text = (
                     "```json\n"
                     "{\n"
-                    '  "critical_issues": ["第 4 行存在未处理的 null 异常隐患，极易导致运行时 TypeError 崩溃", "缺少针对空入参防御的测试覆盖"],\n'
-                    '  "suggestions": ["建议使用可选链语法 (user?.wallet?.balance) 进行防御式属性读取"]\n'
+                    f'  "critical_issues": ["{file_prefix}存在未处理的 null / undefined 潜在风险，极易导致运行时 TypeError 崩溃", "{file_prefix}缺少针对空入参防御的测试覆盖"],\n'
+                    f'  "suggestions": ["{file_prefix}建议使用可选链语法 ({safe_var}) 进行防御式属性读取"]\n'
                     "}\n"
                     "```"
                 )
@@ -108,8 +154,8 @@ class LLMService:
                 sample_text = (
                     "```json\n"
                     "{\n"
-                    '  "critical_issues": ["检测到高危函数 eval()/exec()，存在任意代码执行漏洞"],\n'
-                    '  "suggestions": ["建议禁用动态代码执行，改用安全的数据解析或字典映射"]\n'
+                    f'  "critical_issues": ["{file_prefix}检测到高危函数 eval()/exec()，存在任意代码执行漏洞"],\n'
+                    f'  "suggestions": ["{file_prefix}建议禁用动态代码执行，改用安全的数据解析或字典映射"]\n'
                     "}\n"
                     "```"
                 )
@@ -118,7 +164,7 @@ class LLMService:
                     "```json\n"
                     "{\n"
                     '  "critical_issues": [],\n'
-                    '  "suggestions": ["代码逻辑清晰，建议补充完整的类型提示与 JSDoc 注释"]\n'
+                    f'  "suggestions": ["{file_prefix}代码逻辑清晰，建议补充完整的类型提示与 JSDoc 注释"]\n'
                     "}\n"
                     "```"
                 )

@@ -24,6 +24,7 @@ import {
   Bot,
   Terminal,
   Zap,
+  Power,
 } from "lucide-react";
 import { Chip } from "@heroui/react";
 import { useFlowStore } from "@/stores/useFlowStore";
@@ -46,6 +47,7 @@ export function QualityDashboardView() {
     isEventRead,
     unreadEventsCount,
     fetchProjects,
+    updateProjectGateMode,
     fetchRecentEvents,
     setActiveViewMode,
     setSettingsModalOpen,
@@ -58,6 +60,28 @@ export function QualityDashboardView() {
   const [isIntegrationModalOpen, setIsIntegrationModalOpen] = useState(false);
   const [isRuleModalOpen, setIsRuleModalOpen] = useState(false);
   const [ruleModalEvent, setRuleModalEvent] = useState<ScanEventItem | null>(null);
+  const [modeNotification, setModeNotification] = useState<string | null>(null);
+  const [isUpdatingMode, setIsUpdatingMode] = useState<string | null>(null);
+
+  const handleToggleGateMode = async (
+    projectId: string,
+    mode: "block_commit" | "warn_only" | "disabled"
+  ) => {
+    setIsUpdatingMode(projectId);
+    try {
+      await updateProjectGateMode(projectId, mode);
+      const modeLabel =
+        mode === "warn_only"
+          ? "⚠️ 仅提示不阻断模式（提交 100% 放行，不卡开发！）"
+          : mode === "disabled"
+          ? "⚪ 门禁已完全关闭（跳过检查秒级提交）"
+          : "🛑 严格阻断模式（拦截严重隐患）";
+      setModeNotification(`仓库 [${projectId}] 门禁已切换为：${modeLabel}`);
+      setTimeout(() => setModeNotification(null), 5000);
+    } finally {
+      setIsUpdatingMode(null);
+    }
+  };
 
   const handleOpenRuleEvolution = (event: ScanEventItem) => {
     setRuleModalEvent(event);
@@ -139,18 +163,8 @@ export function QualityDashboardView() {
         <div className="flex items-center gap-2.5">
           <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs font-mono text-emerald-600 dark:text-emerald-400">
             <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span>Git Hook 探针全域守护中</span>
+            <span>Git Hook 探针守护中</span>
           </div>
-
-          <button
-            onClick={() => setSettingsModalOpen(true, "feishu")}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors shadow-sm"
-            title="配置飞书群机器人 Webhook 实时拦截通知"
-          >
-            <Bot className="h-3.5 w-3.5 text-blue-500" />
-            <span>飞书通知</span>
-          </button>
-
 
           <button
             onClick={() => setIsIntegrationModalOpen(true)}
@@ -169,18 +183,27 @@ export function QualityDashboardView() {
             <Sparkles className="h-3.5 w-3.5 text-amber-500" />
             <span>规则与 Skill 库</span>
           </button>
-
-          <button
-            onClick={handleRefresh}
-            disabled={isRefreshing}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors shadow-sm cursor-pointer"
-            title="刷新大盘最新数据"
-          >
-            <RefreshCw className={cn("h-3.5 w-3.5 text-slate-500 dark:text-slate-400", isRefreshing && "animate-spin text-blue-500")} />
-            <span>{isRefreshing ? "刷新中..." : "刷新大盘"}</span>
-          </button>
         </div>
       </div>
+
+      {/* Mode Notification Floating Toast / Banner */}
+      {modeNotification && (
+        <div className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300/80 dark:border-emerald-700/60 text-emerald-800 dark:text-emerald-200 text-xs shadow-md animate-in fade-in slide-in-from-top-2">
+          <div className="flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-ping" />
+            <span className="font-semibold">{modeNotification}</span>
+            <span className="text-emerald-600 dark:text-emerald-400 text-[11px]">
+              （下一次 git commit 立即生效）
+            </span>
+          </div>
+          <button
+            onClick={() => setModeNotification(null)}
+            className="text-emerald-700 dark:text-emerald-300 hover:text-emerald-900 dark:hover:text-white text-xs px-1.5 py-0.5 rounded cursor-pointer"
+          >
+            ✕ 关闭
+          </button>
+        </div>
+      )}
 
       {/* 4 Core KPIs */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -292,6 +315,84 @@ export function QualityDashboardView() {
                       {proj.pass_rate}%
                     </div>
                     <div className="text-[10px] text-slate-500">通过率</div>
+                  </div>
+                </div>
+
+                {/* Gatekeeper Mode & Control Switch */}
+                <div
+                  className="mt-3 p-2 rounded-lg bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-800 flex items-center justify-between gap-2"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <Power className={cn(
+                      "h-3.5 w-3.5 shrink-0",
+                      proj.failure_action === "disabled" || proj.gate_enabled === false
+                        ? "text-slate-400"
+                        : proj.failure_action === "warn_only"
+                        ? "text-amber-500"
+                        : "text-rose-500"
+                    )} />
+                    <span className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 shrink-0">
+                      门禁卡点:
+                    </span>
+                    <span
+                      className={cn(
+                        "text-[10px] font-bold px-1.5 py-0.5 rounded-full whitespace-nowrap",
+                        proj.failure_action === "disabled" || proj.gate_enabled === false
+                          ? "bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-400"
+                          : proj.failure_action === "warn_only"
+                          ? "bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-300/40"
+                          : "bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-300/40"
+                      )}
+                    >
+                      {proj.failure_action === "disabled" || proj.gate_enabled === false
+                        ? "⚪ 已关闭"
+                        : proj.failure_action === "warn_only"
+                        ? "⚠️ 仅提示不阻断"
+                        : "🛑 严格阻断"}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-1 shrink-0 bg-white dark:bg-slate-900 p-0.5 rounded-md border border-slate-200 dark:border-slate-800 shadow-xs">
+                    <button
+                      disabled={isUpdatingMode === proj.id}
+                      onClick={() => handleToggleGateMode(proj.id, "warn_only")}
+                      className={cn(
+                        "px-2 py-0.5 rounded text-[10px] font-medium transition-all cursor-pointer",
+                        proj.failure_action === "warn_only"
+                          ? "bg-amber-500 text-white font-bold shadow-xs"
+                          : "text-slate-500 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/30"
+                      )}
+                      title="开发期推荐：AI正常输出优化建议，但100%放行提交，不阻断开发速度！"
+                    >
+                      仅提示
+                    </button>
+                    <button
+                      disabled={isUpdatingMode === proj.id}
+                      onClick={() => handleToggleGateMode(proj.id, "block_commit")}
+                      className={cn(
+                        "px-2 py-0.5 rounded text-[10px] font-medium transition-all cursor-pointer",
+                        proj.failure_action === "block_commit" && proj.gate_enabled !== false
+                          ? "bg-rose-600 text-white font-bold shadow-xs"
+                          : "text-slate-500 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30"
+                      )}
+                      title="严格卡点模式：发现严重问题拦截提交"
+                    >
+                      阻断
+                    </button>
+                    <button
+                      disabled={isUpdatingMode === proj.id}
+                      onClick={() => handleToggleGateMode(proj.id, "disabled")}
+                      className={cn(
+                        "px-2 py-0.5 rounded text-[10px] font-medium transition-all cursor-pointer",
+                        proj.failure_action === "disabled" || proj.gate_enabled === false
+                          ? "bg-slate-600 text-white font-bold shadow-xs"
+                          : "text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+                      )}
+                      title="完全关闭门禁：跳过检查秒级提交"
+                    >
+                      关闭
+                    </button>
                   </div>
                 </div>
 

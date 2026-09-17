@@ -1,7 +1,6 @@
-"""Specialized AI Agents for FlowDev-AI platform: ReviewAgent and TestAgent."""
-
+import json
 import re
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 def extract_code_block(text: str, default_lang: str = "python") -> str:
@@ -14,6 +13,49 @@ def extract_code_block(text: str, default_lang: str = "python") -> str:
         longest = max(matches, key=len)
         return longest.strip()
     return text.strip()
+
+
+def extract_json_object(text: str) -> Optional[Dict[str, Any]]:
+    """Robustly extracts and parses a JSON object from text, even if enclosed in
+    markdown code blocks or containing nested code fences within string literals.
+    """
+    if not text:
+        return None
+
+    # 1. Direct parse attempt
+    try:
+        data = json.loads(text, strict=False)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+
+    # 2. Outermost curly braces extraction (handles ```json ... ``` with nested fences)
+    first_brace = text.find("{")
+    last_brace = text.rfind("}")
+    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+        candidate = text[first_brace : last_brace + 1]
+        try:
+            data = json.loads(candidate, strict=False)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+
+    # 3. Fallback via extract_code_block
+    code_block = extract_code_block(text, "json")
+    if code_block and code_block != text:
+        fb = code_block.find("{")
+        lb = code_block.rfind("}")
+        if fb != -1 and lb != -1 and lb >= fb:
+            try:
+                data = json.loads(code_block[fb : lb + 1], strict=False)
+                if isinstance(data, dict):
+                    return data
+            except Exception:
+                pass
+
+    return None
 
 
 class ReviewAgent:

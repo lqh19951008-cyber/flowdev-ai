@@ -1,0 +1,35 @@
+# rxjs - Code Quality Standards & Agent Skills
+> Automatically synthesized and maintained by FlowDev-AI Pre-Commit Gatekeeper.
+> Target Spec: Claude Code Guidelines (CLAUDE.md)
+
+## General Instructions
+You are the AI coding companion working on repository 'rxjs'.
+You must strictly adhere to the following quality standards and learned architectural constraints.
+Under no circumstances should you generate code that violates these rules.
+
+## Pre-Commit Quality Gate Regex Constraints
+The repository gatekeeper actively blocks commits violating these regex patterns:
+- **未防御的深层属性访问与空对象引用**: `\b(null|undefined)\.[a-zA-Z0-9_]+`
+  *Reason:* 检测到针对 null/undefined 的直接属性访问，请使用可选链 (?.) 或显式判空防御！
+
+## Synthesized Agent Skills & Defensive Standards
+### Skill 1: 防御性可选链与空指针安全防护规范
+**Summary:** 禁止对深层对象或外部输入进行未经校验的解构和直接链式访问，必须使用可选链（?.）与空值合并运算符（??）。
+
+# Skill: Defensive Optional Chaining & Null Safety
+
+## Context
+When writing JavaScript / TypeScript code that accesses external API payloads, nested state, or optional parameters, avoid direct chaining that causes runtime crashes.
+
+## Guidelines for AI Coding Assistants
+1. **Always use optional chaining (`?.`)** when traversing 2+ levels deep into objects that may be undefined.
+2. **Provide safe fallbacks with `??`** (nullish coalescing) instead of assuming values always exist.
+3. **Perform guard clauses** early in handler functions (`if (!payload) return;`).
+4. **Do not use dangerous type assertions** (`as any` or `!`) to bypass compiler type checks.
+
+## Example
+```typescript
+// Safe access pattern
+const total = cart?.summary?.totalAmount ?? 0;
+```
+
