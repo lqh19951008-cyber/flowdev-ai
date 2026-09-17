@@ -90,6 +90,55 @@ function printBanner() {
   }
 }
 
+const IGNORED_DIR_PATTERNS = [
+  /(?:^|[\\/])node_modules(?:[\\/]|$)/i,
+  /(?:^|[\\/])dist(?:[\\/]|$)/i,
+  /(?:^|[\\/])build(?:[\\/]|$)/i,
+  /(?:^|[\\/])out(?:[\\/]|$)/i,
+  /(?:^|[\\/])\.next(?:[\\/]|$)/i,
+  /(?:^|[\\/])coverage(?:[\\/]|$)/i,
+  /(?:^|[\\/])__pycache__(?:[\\/]|$)/i,
+  /(?:^|[\\/])\.pytest_cache(?:[\\/]|$)/i,
+  /(?:^|[\\/])\.venv(?:[\\/]|$)/i,
+  /(?:^|[\\/])venv(?:[\\/]|$)/i,
+  /(?:^|[\\/])env(?:[\\/]|$)/i,
+  /(?:^|[\\/])\.agents?(?:[\\/]|$)/i,
+  /(?:^|[\\/])\.gemini(?:[\\/]|$)/i,
+  /(?:^|[\\/])vendor(?:[\\/]|$)/i,
+  /(?:^|[\\/])third_party(?:[\\/]|$)/i,
+  /(?:^|[\\/])\.idea(?:[\\/]|$)/i,
+  /(?:^|[\\/])\.vscode(?:[\\/]|$)/i,
+  /(?:^|[\\/])\.turbo(?:[\\/]|$)/i,
+  /(?:^|[\\/])\.cache(?:[\\/]|$)/i,
+  /(?:^|[\\/])temp(?:[\\/]|$)/i,
+  /(?:^|[\\/])tmp(?:[\\/]|$)/i,
+  /(?:^|[\\/])output(?:[\\/]|$)/i,
+];
+
+const IGNORED_FILE_PATTERNS = [
+  /\.d\.ts$/i,
+  /\.d\.ts\.map$/i,
+  /\.min\.(js|jsx|ts|tsx)$/i,
+  /\.bundle\.js$/i,
+  /\.chunk\.js$/i,
+  /\.generated\.(js|ts|py|go|java)$/i,
+  /\.pb\.(go|py|cc|h)$/i,
+  /\.snap$/i,
+  /next-env\.d\.ts$/i,
+];
+
+function isIgnoredPath(filePath) {
+  if (!filePath) return true;
+  const normalized = filePath.replace(/\\/g, "/");
+  for (const pattern of IGNORED_DIR_PATTERNS) {
+    if (pattern.test(normalized)) return true;
+  }
+  for (const pattern of IGNORED_FILE_PATTERNS) {
+    if (pattern.test(normalized)) return true;
+  }
+  return false;
+}
+
 function getStagedCodeFiles() {
   try {
     const output = gitExec(["diff", "--cached", "--name-only", "--diff-filter=ACM"]);
@@ -98,9 +147,9 @@ function getStagedCodeFiles() {
       .map((f) => f?.trim() ?? "")
       .filter(Boolean);
 
-    // Filter relevant code files
+    // Filter relevant code files while excluding ignored dirs and generated/bundle/declaration files
     const codeExts = /\.(js|jsx|ts|tsx|py|go|java)$/i;
-    return lines.filter((file) => codeExts.test(file));
+    return lines.filter((file) => codeExts.test(file) && !isIgnoredPath(file));
   } catch (e) {
     return [];
   }

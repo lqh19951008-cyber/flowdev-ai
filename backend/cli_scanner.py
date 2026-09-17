@@ -68,7 +68,31 @@ class ProjectGatePolicy:
 
     def __init__(self, raw_policy: Any):
         self.file_patterns: List[str] = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.py", "**/*.go", "**/*.java"]
-        self.ignored_dirs: List[str] = ["node_modules", "dist", ".next", "build", "coverage", ".git"]
+        self.ignored_dirs: List[str] = [
+            "node_modules",
+            "dist",
+            ".next",
+            "build",
+            "out",
+            "coverage",
+            ".git",
+            "__pycache__",
+            ".pytest_cache",
+            ".venv",
+            "venv",
+            "env",
+            "vendor",
+            "third_party",
+            ".agents",
+            ".agent",
+            ".idea",
+            ".vscode",
+            ".turbo",
+            ".cache",
+            "temp",
+            "tmp",
+            "output",
+        ]
         self.max_file_size_kb: int = 1000
 
         # Rule switches
@@ -257,6 +281,21 @@ class CliScanner:
                     is_ignored = True
                     break
             if is_ignored:
+                continue
+
+            # Check if file matches ignored extensions or generated patterns
+            lower_fname = fname.lower().replace("\\", "/")
+            if (
+                lower_fname.endswith(".d.ts")
+                or lower_fname.endswith(".d.ts.map")
+                or ".min." in lower_fname
+                or lower_fname.endswith(".bundle.js")
+                or lower_fname.endswith(".chunk.js")
+                or ".generated." in lower_fname
+                or ".pb." in lower_fname
+                or lower_fname.endswith(".snap")
+                or lower_fname.endswith("next-env.d.ts")
+            ):
                 continue
 
             file_critical: List[str] = []
