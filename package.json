@@ -20,14 +20,14 @@
     "hook:enable": "node scripts/flowdev-hook.js --enable",
     "hook:sync": "node scripts/flowdev-hook.js --sync-skills",
 
-    "dev:all": "powershell -NoProfile -ExecutionPolicy Bypass -File start.ps1 -NoBrowser",
-    "dev:backend": "powershell -NoProfile -ExecutionPolicy Bypass -File start.ps1 -BackendOnly -NoBrowser",
-    "dev:frontend": "powershell -NoProfile -ExecutionPolicy Bypass -File start.ps1 -FrontendOnly -NoBrowser",
-    "dev:restart": "powershell -NoProfile -ExecutionPolicy Bypass -File manage.ps1 -Action restart",
-    "dev:stop": "powershell -NoProfile -ExecutionPolicy Bypass -File manage.ps1 -Action stop",
-    "dev:status": "powershell -NoProfile -ExecutionPolicy Bypass -File manage.ps1 -Action status",
-    "dev:logs": "powershell -NoProfile -ExecutionPolicy Bypass -File manage.ps1 -Action logs",
-    "dev:menu": "powershell -NoProfile -ExecutionPolicy Bypass -File manage.ps1 -Action menu"
+    "dev:all": "node scripts/dev.js all",
+    "dev:backend": "node scripts/dev.js backend",
+    "dev:frontend": "node scripts/dev.js frontend",
+    "dev:restart": "node scripts/dev.js restart",
+    "dev:stop": "node scripts/dev.js stop",
+    "dev:status": "node scripts/dev.js status",
+    "dev:logs": "node scripts/dev.js logs",
+    "dev:menu": "node scripts/dev.js menu"
   },
   "dependencies": {
     "@heroui/react": "^2.7.11",
