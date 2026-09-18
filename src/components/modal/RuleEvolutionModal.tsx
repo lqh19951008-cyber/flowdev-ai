@@ -21,6 +21,11 @@ import {
   RefreshCw,
   FolderGit2,
   FileText,
+  ArrowRight,
+  ChevronDown,
+  Lightbulb,
+  GitBranch,
+  Wand2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ScanEventItem, SynthesizedRule, CustomGateRule, AgentSkillItem } from "@/types/flow";
@@ -47,6 +52,8 @@ export function RuleEvolutionModal({
   const [applyLoading, setApplyLoading] = useState(false);
   const [appliedSuccess, setAppliedSuccess] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  // 折叠面板状态：默认收起 Skill + Gatekeeper 两块次要信息
+  const [expandedSection, setExpandedSection] = useState<"skill" | "gate" | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -231,6 +238,87 @@ export function RuleEvolutionModal({
 
   const totalActiveRulesCount = libRules.length;
 
+  // 当前闭环进度：已应用=4；Evolve 加载中=1；Evolve 出结果=2；Library=3
+  const activeStage: 1 | 2 | 3 | 4 = appliedSuccess
+    ? 4
+    : activeTab === "evolve"
+    ? loading
+      ? 1
+      : 2
+    : 3;
+
+  // 闭环流程图子组件
+  const FlowDiagram = () => {
+    const steps = [
+      { icon: ShieldAlert, label: "① 拦截", desc: "Pre-Commit 捕获缺陷", activeColor: "rose" },
+      { icon: Wand2, label: "② 提炼", desc: "AI 总结防御原则", activeColor: "amber" },
+      { icon: Layers, label: "③ 固化", desc: "入库为规则与 Skill", activeColor: "indigo" },
+      { icon: GitBranch, label: "④ 生效", desc: "AI Review / 提交自动应用", activeColor: "emerald" },
+    ];
+    return (
+      <div className="px-6 py-3 border-b border-slate-100 dark:border-slate-800 bg-gradient-to-r from-rose-50/30 via-amber-50/20 to-emerald-50/30 dark:from-rose-950/10 dark:via-amber-950/10 dark:to-emerald-950/10">
+        <div className="flex items-center gap-1.5">
+          {steps.map((step, idx) => {
+            const isActive = activeStage >= (idx + 1);
+            const Icon = step.icon;
+            return (
+              <React.Fragment key={step.label}>
+                <div
+                  className={cn(
+                    "flex-1 flex items-center gap-2 px-2.5 py-1.5 rounded-lg border transition-all",
+                    isActive
+                      ? "border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm"
+                      : "border-slate-200/50 dark:border-slate-800/50 bg-white/40 dark:bg-slate-900/30"
+                  )}
+                >
+                  <div
+                    className={cn(
+                      "h-7 w-7 rounded-md flex items-center justify-center shrink-0 transition-colors",
+                      isActive
+                        ? step.activeColor === "rose"
+                          ? "bg-rose-500 text-white"
+                          : step.activeColor === "amber"
+                          ? "bg-amber-500 text-white"
+                          : step.activeColor === "indigo"
+                          ? "bg-indigo-500 text-white"
+                          : "bg-emerald-500 text-white"
+                        : "bg-slate-100 dark:bg-slate-800 text-slate-400"
+                    )}
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                  </div>
+                  <div className="min-w-0">
+                    <div
+                      className={cn(
+                        "text-[11px] font-bold leading-tight",
+                        isActive ? "text-slate-900 dark:text-slate-100" : "text-slate-400"
+                      )}
+                    >
+                      {step.label}
+                    </div>
+                    <div className="text-[9px] text-slate-500 dark:text-slate-400 leading-tight truncate">
+                      {step.desc}
+                    </div>
+                  </div>
+                </div>
+                {idx < steps.length - 1 && (
+                  <ArrowRight
+                    className={cn(
+                      "h-3.5 w-3.5 shrink-0",
+                      activeStage > idx + 1
+                        ? "text-indigo-500 dark:text-indigo-400"
+                        : "text-slate-300 dark:text-slate-700"
+                    )}
+                  />
+                )}
+              </React.Fragment>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-950/60 backdrop-blur-sm animate-in fade-in duration-200">
       <div className="relative w-full max-w-4xl max-h-[90vh] flex flex-col rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl overflow-hidden">
@@ -267,6 +355,9 @@ export function RuleEvolutionModal({
             <X className="h-5 w-5" />
           </button>
         </div>
+
+        {/* AI Skill Evolution Loop Diagram */}
+        <FlowDiagram />
 
         {/* Navigation Tabs */}
         <div className="flex items-center px-6 border-b border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900">
@@ -319,152 +410,190 @@ export function RuleEvolutionModal({
                 </p>
               </div>
             ) : synthesizedRule ? (
-              <div className="space-y-6">
-                {/* 1. Rule Summary Card */}
-                <div className="p-4 rounded-xl border border-amber-200/80 dark:border-amber-900/40 bg-gradient-to-br from-amber-50/60 via-white to-amber-50/30 dark:from-amber-950/20 dark:via-slate-900 dark:to-slate-900/50 shadow-sm space-y-3">
-                  <div className="flex items-center justify-between flex-wrap gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/20">
-                        {synthesizedRule.category === "stability"
-                          ? "🛡️ 稳定性守护"
-                          : synthesizedRule.category === "security"
-                          ? "🔒 安全防护"
-                          : "⚡ 性能与架构"}
-                      </span>
-                      <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                        {synthesizedRule.title}
-                      </h3>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-rose-50 dark:bg-rose-950/30 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-900/50">
-                        卡点级别: {synthesizedRule.severity === "critical" ? "致命阻断 (Critical)" : "优化建议 (Warning)"}
-                      </span>
-                    </div>
-                  </div>
-
-                  <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed font-medium">
-                    💡 核心防御原则: {synthesizedRule.summary}
-                  </p>
+              <div className="space-y-5">
+                {/* 进度条：当前所在闭环阶段 */}
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-900/60 border border-slate-200/60 dark:border-slate-800">
+                  {[
+                    { label: "① 拦截事件", done: true },
+                    { label: "② AI 提炼", done: true },
+                    { label: "③ 准备固化", done: appliedSuccess },
+                  ].map((step, idx, arr) => (
+                    <React.Fragment key={step.label}>
+                      <div className={cn(
+                        "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors",
+                        step.done
+                          ? "bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/50"
+                          : "bg-white dark:bg-slate-900 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-800"
+                      )}>
+                        {step.done ? <CheckCircle2 className="h-3 w-3" /> : <div className="h-3 w-3 rounded-full border-2 border-slate-300 dark:border-slate-700" />}
+                        <span>{step.label}</span>
+                      </div>
+                      {idx < arr.length - 1 && (
+                        <ArrowRight className="h-3 w-3 text-slate-300 dark:text-slate-700 shrink-0" />
+                      )}
+                    </React.Fragment>
+                  ))}
+                  <span className="ml-auto text-[10px] text-slate-400 font-mono">点击底部按钮完成固化</span>
                 </div>
 
-                {/* 2. Bad vs Good Code Comparison */}
-                <div className="space-y-2">
-                  <div className="text-xs font-bold text-slate-900 dark:text-slate-200 flex items-center gap-2">
-                    <Code2 className="h-4 w-4 text-indigo-500" />
-                    <span>规范正反例对比 (Negative vs Positive Examples)</span>
+                {/* 1. Bad vs Good Code Comparison (主视觉) */}
+                <div className="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900/40 overflow-hidden">
+                  <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-100 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/60">
+                    <div className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-slate-100">
+                      <Code2 className="h-4 w-4 text-indigo-500" />
+                      <span>规范正反例对比</span>
+                      <span className="text-[10px] text-slate-400 font-normal">Negative vs Positive</span>
+                    </div>
+                    <span className="text-[10px] text-slate-400 font-mono">点击复制</span>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 divide-x divide-slate-100 dark:divide-slate-800">
                     {/* Bad Code */}
-                    <div className="rounded-xl border border-rose-200 dark:border-rose-900/40 bg-rose-50/20 dark:bg-rose-950/10 overflow-hidden">
-                      <div className="flex items-center justify-between px-3 py-2 bg-rose-100/50 dark:bg-rose-950/40 border-b border-rose-200 dark:border-rose-900/40 text-xs font-semibold text-rose-700 dark:text-rose-300">
-                        <span className="flex items-center gap-1.5">
-                          <AlertTriangle className="h-3.5 w-3.5 text-rose-500" />
-                          ❌ 拦截反例 (触发门禁崩溃隐患)
+                    <div className="bg-rose-50/30 dark:bg-rose-950/10">
+                      <div className="flex items-center justify-between px-3 py-2 border-b border-rose-100 dark:border-rose-900/30">
+                        <span className="flex items-center gap-1.5 text-xs font-bold text-rose-700 dark:text-rose-300">
+                          <AlertTriangle className="h-3.5 w-3.5" />
+                          ❌ 拦截反例
                         </span>
                         <button
                           onClick={() => handleCopy(synthesizedRule.bad_snippet, "bad")}
-                          className="text-[10px] text-rose-600 hover:text-rose-800 dark:hover:text-rose-200 flex items-center gap-1"
+                          className="text-[10px] text-rose-600 hover:text-rose-800 dark:hover:text-rose-200 flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-rose-100 dark:hover:bg-rose-950/40 transition-colors"
                         >
                           {copiedKey === "bad" ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
                           {copiedKey === "bad" ? "已复制" : "复制"}
                         </button>
                       </div>
-                      <pre className="p-3 text-[11px] font-mono text-rose-900 dark:text-rose-200 overflow-x-auto whitespace-pre-wrap leading-relaxed">
+                      <pre className="p-3 text-[12px] font-mono text-rose-900 dark:text-rose-200 overflow-x-auto whitespace-pre-wrap leading-relaxed min-h-[100px]">
                         {synthesizedRule.bad_snippet}
                       </pre>
                     </div>
 
                     {/* Good Code */}
-                    <div className="rounded-xl border border-emerald-200 dark:border-emerald-900/40 bg-emerald-50/20 dark:bg-emerald-950/10 overflow-hidden">
-                      <div className="flex items-center justify-between px-3 py-2 bg-emerald-100/50 dark:bg-emerald-950/40 border-b border-emerald-200 dark:border-emerald-900/40 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
-                        <span className="flex items-center gap-1.5">
-                          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-                          ✅ 沉淀正例 (防御性规范最佳实践)
+                    <div className="bg-emerald-50/30 dark:bg-emerald-950/10">
+                      <div className="flex items-center justify-between px-3 py-2 border-b border-emerald-100 dark:border-emerald-900/30">
+                        <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 dark:text-emerald-300">
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          ✅ 沉淀正例
                         </span>
                         <button
                           onClick={() => handleCopy(synthesizedRule.good_snippet, "good")}
-                          className="text-[10px] text-emerald-600 hover:text-emerald-800 dark:hover:text-emerald-200 flex items-center gap-1"
+                          className="text-[10px] text-emerald-600 hover:text-emerald-800 dark:hover:text-emerald-200 flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-emerald-100 dark:hover:bg-emerald-950/40 transition-colors"
                         >
                           {copiedKey === "good" ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
                           {copiedKey === "good" ? "已复制" : "复制"}
                         </button>
                       </div>
-                      <pre className="p-3 text-[11px] font-mono text-emerald-900 dark:text-emerald-200 overflow-x-auto whitespace-pre-wrap leading-relaxed">
+                      <pre className="p-3 text-[12px] font-mono text-emerald-900 dark:text-emerald-200 overflow-x-auto whitespace-pre-wrap leading-relaxed min-h-[100px]">
                         {synthesizedRule.good_snippet}
                       </pre>
                     </div>
                   </div>
                 </div>
 
-                {/* 3. IDE Agent Skill (.cursorrules / SKILL.md) */}
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div className="text-xs font-bold text-slate-900 dark:text-slate-200 flex items-center gap-2">
-                      <Cpu className="h-4 w-4 text-cyan-500" />
-                      <span>IDE AI 智能体 Skill 规范 (.cursorrules / SKILL.md)</span>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => handleCopy(synthesizedRule.skill_markdown, "skill")}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-xs font-medium text-slate-700 dark:text-slate-300 transition-colors"
-                      >
-                        {copiedKey === "skill" ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
-                        {copiedKey === "skill" ? "已复制 Skill" : "复制 Skill Markdown"}
-                      </button>
-
-                      <button
-                        onClick={() => handleDownloadCursorRules(synthesizedRule.skill_markdown, ".cursorrules")}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-xs font-medium text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800 transition-colors"
-                      >
-                        <Download className="h-3.5 w-3.5" />
-                        <span>导出 .cursorrules</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="p-3.5 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-900 text-slate-200 font-mono text-xs overflow-x-auto relative">
-                    <div className="text-[10px] text-slate-400 mb-2 font-sans flex items-center gap-1.5">
-                      <Terminal className="h-3 w-3 text-cyan-400" />
-                      <span>
-                        放于项目根目录后，Cursor、Copilot 与 Claude Code 在生成代码时将严格遵守该规范，从根源规避缺陷。
-                      </span>
-                    </div>
-                    <pre className="whitespace-pre-wrap leading-relaxed max-h-48 overflow-y-auto text-slate-300">
-                      {synthesizedRule.skill_markdown}
-                    </pre>
-                  </div>
+                {/* 2. Rule Summary (精简 chip 行) */}
+                <div className="flex items-center gap-2 flex-wrap px-3 py-2.5 rounded-xl border border-amber-200/80 dark:border-amber-900/40 bg-amber-50/40 dark:bg-amber-950/20">
+                  <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30">
+                    {synthesizedRule.category === "stability"
+                      ? "🛡️ 稳定性守护"
+                      : synthesizedRule.category === "security"
+                      ? "🔒 安全防护"
+                      : "⚡ 性能与架构"}
+                  </span>
+                  <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-rose-50 dark:bg-rose-950/30 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-900/50">
+                    {synthesizedRule.severity === "critical" ? "致命阻断" : "优化建议"}
+                  </span>
+                  <span className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate flex-1 min-w-0">
+                    {synthesizedRule.title}
+                  </span>
+                  <Lightbulb className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                  <span className="text-[11px] text-slate-700 dark:text-slate-300 font-medium line-clamp-1 max-w-md">
+                    {synthesizedRule.summary}
+                  </span>
                 </div>
 
-                {/* 4. Pre-Commit Gatekeeper Rule */}
-                <div className="p-4 rounded-xl border border-indigo-200/80 dark:border-indigo-900/40 bg-indigo-50/30 dark:bg-indigo-950/20 space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <div className="text-xs font-bold text-indigo-900 dark:text-indigo-200 flex items-center gap-2">
+                {/* 3. IDE Agent Skill (默认折叠) */}
+                <div className="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900/40 overflow-hidden">
+                  <button
+                    onClick={() => setExpandedSection(expandedSection === "skill" ? null : "skill")}
+                    className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-slate-50/60 dark:hover:bg-slate-900/60 transition-colors"
+                  >
+                    <div className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-slate-100">
+                      <Cpu className="h-4 w-4 text-cyan-500" />
+                      <span>IDE AI 智能体 Skill 规范</span>
+                      <span className="text-[10px] text-slate-400 font-normal">(.cursorrules / SKILL.md)</span>
+                    </div>
+                    <ChevronDown
+                      className={cn(
+                        "h-4 w-4 text-slate-400 transition-transform",
+                        expandedSection === "skill" && "rotate-180"
+                      )}
+                    />
+                  </button>
+
+                  {expandedSection === "skill" && (
+                    <div className="px-4 pb-3 space-y-2 border-t border-slate-100 dark:border-slate-800 pt-3">
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => handleCopy(synthesizedRule.skill_markdown, "skill")}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-xs font-medium text-slate-700 dark:text-slate-300 transition-colors"
+                        >
+                          {copiedKey === "skill" ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+                          {copiedKey === "skill" ? "已复制 Skill" : "复制 Skill Markdown"}
+                        </button>
+                        <button
+                          onClick={() => handleDownloadCursorRules(synthesizedRule.skill_markdown, ".cursorrules")}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-xs font-medium text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800 transition-colors"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                          <span>导出 .cursorrules</span>
+                        </button>
+                      </div>
+                      <div className="p-3 rounded-lg border border-slate-200/80 dark:border-slate-800 bg-slate-900 text-slate-200 font-mono text-xs overflow-x-auto">
+                        <pre className="whitespace-pre-wrap leading-relaxed max-h-48 overflow-y-auto text-slate-300">
+                          {synthesizedRule.skill_markdown}
+                        </pre>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* 4. Pre-Commit Gatekeeper Rule (默认折叠) */}
+                <div className="rounded-xl border border-indigo-200/80 dark:border-indigo-900/40 bg-indigo-50/20 dark:bg-indigo-950/10 overflow-hidden">
+                  <button
+                    onClick={() => setExpandedSection(expandedSection === "gate" ? null : "gate")}
+                    className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-indigo-50/40 dark:hover:bg-indigo-950/20 transition-colors"
+                  >
+                    <div className="flex items-center gap-2 text-xs font-bold text-indigo-900 dark:text-indigo-200">
                       <ShieldAlert className="h-4 w-4 text-indigo-500" />
                       <span>Git Pre-Commit 门禁静态卡点规则</span>
-                    </div>
-                    <span className="text-[10px] text-indigo-600 dark:text-indigo-400 font-mono">
-                      本地提交前实时正则拦截
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                    <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-indigo-100 dark:border-indigo-900/60">
-                      <span className="text-[10px] text-slate-400 block mb-0.5">静态检测正则 (Pattern):</span>
-                      <code className="font-mono text-indigo-600 dark:text-indigo-400 font-bold break-all">
-                        {synthesizedRule.gate_rule.pattern}
-                      </code>
-                    </div>
-
-                    <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-indigo-100 dark:border-indigo-900/60">
-                      <span className="text-[10px] text-slate-400 block mb-0.5">拦截提示文案 (Message):</span>
-                      <span className="text-slate-700 dark:text-slate-300 font-medium">
-                        {synthesizedRule.gate_rule.message}
+                      <span className="text-[10px] text-indigo-600 dark:text-indigo-400 font-mono font-normal">
+                        本地提交前实时正则拦截
                       </span>
                     </div>
-                  </div>
+                    <ChevronDown
+                      className={cn(
+                        "h-4 w-4 text-indigo-400 transition-transform",
+                        expandedSection === "gate" && "rotate-180"
+                      )}
+                    />
+                  </button>
+
+                  {expandedSection === "gate" && (
+                    <div className="px-4 pb-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs border-t border-indigo-100 dark:border-indigo-900/40 pt-3">
+                      <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-indigo-100 dark:border-indigo-900/60">
+                        <span className="text-[10px] text-slate-400 block mb-0.5">静态检测正则 (Pattern):</span>
+                        <code className="font-mono text-indigo-600 dark:text-indigo-400 font-bold break-all">
+                          {synthesizedRule.gate_rule.pattern}
+                        </code>
+                      </div>
+                      <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-indigo-100 dark:border-indigo-900/60">
+                        <span className="text-[10px] text-slate-400 block mb-0.5">拦截提示文案 (Message):</span>
+                        <span className="text-slate-700 dark:text-slate-300 font-medium">
+                          {synthesizedRule.gate_rule.message}
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             ) : (
@@ -567,50 +696,85 @@ export function RuleEvolutionModal({
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 pt-1 flex-wrap">
-                  <span className="text-[11px] text-slate-500 font-medium">快速按需导出规范:</span>
-                  <button
-                    onClick={() => handleDownloadFormat("antigravity_skill")}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 transition-all shadow-xs cursor-pointer"
-                  >
-                    <Sparkles className="h-3 w-3 text-cyan-300" />
-                    <span>⚡ Antigravity Skill (SKILL.md)</span>
-                  </button>
-                  <button
-                    onClick={() => handleDownloadFormat("gemini_md")}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-blue-400 text-slate-700 dark:text-slate-200 transition-all shadow-xs cursor-pointer"
-                  >
-                    <FileText className="h-3 w-3 text-blue-500" />
-                    <span>GEMINI.md (Antigravity Rules)</span>
-                  </button>
-                  <button
-                    onClick={() => handleDownloadFormat("cursorrules")}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 text-slate-700 dark:text-slate-200 transition-all shadow-xs cursor-pointer"
-                  >
-                    <Download className="h-3 w-3 text-indigo-500" />
-                    <span>.cursorrules (Cursor)</span>
-                  </button>
-                  <button
-                    onClick={() => handleDownloadFormat("claude_md")}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-amber-400 text-slate-700 dark:text-slate-200 transition-all shadow-xs cursor-pointer"
-                  >
-                    <Download className="h-3 w-3 text-amber-500" />
-                    <span>CLAUDE.md (Claude Code)</span>
-                  </button>
-                  <button
-                    onClick={() => handleDownloadFormat("copilot")}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-cyan-400 text-slate-700 dark:text-slate-200 transition-all shadow-xs cursor-pointer"
-                  >
-                    <Download className="h-3 w-3 text-cyan-500" />
-                    <span>copilot-instructions.md</span>
-                  </button>
-                  <button
-                    onClick={() => handleDownloadFormat("windsurf")}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-teal-400 text-slate-700 dark:text-slate-200 transition-all shadow-xs cursor-pointer"
-                  >
-                    <Download className="h-3 w-3 text-teal-500" />
-                    <span>.windsurfrules</span>
-                  </button>
+                <div className="pt-1 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] text-slate-500 font-semibold">按需导出规则文件到项目</span>
+                    <span className="text-[10px] text-slate-400 font-mono">点击卡片下载到本地</span>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                    {/* Antigravity Skill - 主推 */}
+                    <button
+                      onClick={() => handleDownloadFormat("antigravity_skill")}
+                      className="group flex flex-col items-start gap-1.5 p-2.5 rounded-lg bg-gradient-to-br from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white transition-all shadow-sm text-left"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <Sparkles className="h-3.5 w-3.5 text-cyan-300" />
+                        <span className="text-[11px] font-bold">Antigravity Skill</span>
+                      </div>
+                      <span className="text-[10px] text-blue-100 font-mono">SKILL.md</span>
+                      <span className="text-[9px] text-blue-200 leading-tight">智能体技能模块</span>
+                    </button>
+
+                    <button
+                      onClick={() => handleDownloadFormat("gemini_md")}
+                      className="group flex flex-col items-start gap-1.5 p-2.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-500 transition-all text-left"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <FileText className="h-3.5 w-3.5 text-blue-500" />
+                        <span className="text-[11px] font-bold text-slate-800 dark:text-slate-100">Antigravity Rules</span>
+                      </div>
+                      <span className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">GEMINI.md</span>
+                      <span className="text-[9px] text-slate-400 leading-tight">Antigravity 项目规则</span>
+                    </button>
+
+                    <button
+                      onClick={() => handleDownloadFormat("cursorrules")}
+                      className="group flex flex-col items-start gap-1.5 p-2.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 dark:hover:border-indigo-500 transition-all text-left"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <Download className="h-3.5 w-3.5 text-indigo-500" />
+                        <span className="text-[11px] font-bold text-slate-800 dark:text-slate-100">Cursor</span>
+                      </div>
+                      <span className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">.cursorrules</span>
+                      <span className="text-[9px] text-slate-400 leading-tight">Cursor AI 规则</span>
+                    </button>
+
+                    <button
+                      onClick={() => handleDownloadFormat("claude_md")}
+                      className="group flex flex-col items-start gap-1.5 p-2.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-amber-400 dark:hover:border-amber-500 transition-all text-left"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <Download className="h-3.5 w-3.5 text-amber-500" />
+                        <span className="text-[11px] font-bold text-slate-800 dark:text-slate-100">Claude Code</span>
+                      </div>
+                      <span className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">CLAUDE.md</span>
+                      <span className="text-[9px] text-slate-400 leading-tight">Claude Code 指南</span>
+                    </button>
+
+                    <button
+                      onClick={() => handleDownloadFormat("copilot")}
+                      className="group flex flex-col items-start gap-1.5 p-2.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-cyan-400 dark:hover:border-cyan-500 transition-all text-left"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <Download className="h-3.5 w-3.5 text-cyan-500" />
+                        <span className="text-[11px] font-bold text-slate-800 dark:text-slate-100">Copilot</span>
+                      </div>
+                      <span className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">copilot-instructions.md</span>
+                      <span className="text-[9px] text-slate-400 leading-tight">GitHub Copilot 指令</span>
+                    </button>
+
+                    <button
+                      onClick={() => handleDownloadFormat("windsurf")}
+                      className="group flex flex-col items-start gap-1.5 p-2.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-teal-400 dark:hover:border-teal-500 transition-all text-left"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <Download className="h-3.5 w-3.5 text-teal-500" />
+                        <span className="text-[11px] font-bold text-slate-800 dark:text-slate-100">Windsurf</span>
+                      </div>
+                      <span className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">.windsurfrules</span>
+                      <span className="text-[9px] text-slate-400 leading-tight">Windsurf 规范</span>
+                    </button>
+                  </div>
                 </div>
               </div>
 
