@@ -300,8 +300,24 @@ export function AddProjectModal(props?: AddProjectModalProps) {
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
-  const hookInstallCmd = `curl -s "${serverUrl}/scripts/flowdev-hook.js" -o .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit`;
+  // 跨平台安装命令：自动检测平台，默认推荐对应 shell 的命令
+  const [installShell, setInstallShell] = useState<"powershell" | "bash">("powershell");
+  useEffect(() => {
+    if (typeof navigator === "undefined") return;
+    // navigator.userAgentData 是实验性 API，做安全访问
+    const uaData = (navigator as { userAgentData?: { platform?: string } })?.userAgentData;
+    const platform: string =
+      uaData?.platform || (navigator as Navigator)?.platform || "";
+    setInstallShell(/win/i.test(platform) ? "powershell" : "bash");
+  }, []);
+
   const nodeInstallCmd = `node scripts/install-hook.js`;
+
+  const platformCommands = {
+    powershell: `Invoke-WebRequest -Uri "${serverUrl}/scripts/flowdev-hook.js" -OutFile ".git\\hooks\\pre-commit" -UseBasicParsing`,
+    bash: `curl -s "${serverUrl}/scripts/flowdev-hook.js" -o .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit`,
+  };
+  const installCmd = platformCommands[installShell];
 
   return (
     <div
@@ -636,22 +652,48 @@ export function AddProjectModal(props?: AddProjectModalProps) {
 
             {/* Quick Install Terminal Commands */}
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between flex-wrap gap-2">
                 <label className="font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
                   <Terminal className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400" />
                   <span>一键安装 Pre-Commit 门禁探针 (本地 Git 仓库终端运行)</span>
                 </label>
-                <span className="text-[10px] text-slate-400 font-mono">1 步即可生效</span>
+                {/* Platform Switcher */}
+                <div className="flex items-center gap-1 p-0.5 rounded-lg bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setInstallShell("powershell")}
+                    className={cn(
+                      "px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all cursor-pointer",
+                      installShell === "powershell"
+                        ? "bg-white dark:bg-slate-900 text-cyan-600 dark:text-cyan-400 shadow-sm"
+                        : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                    )}
+                  >
+                    🪟 PowerShell
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setInstallShell("bash")}
+                    className={cn(
+                      "px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all cursor-pointer",
+                      installShell === "bash"
+                        ? "bg-white dark:bg-slate-900 text-cyan-600 dark:text-cyan-400 shadow-sm"
+                        : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                    )}
+                  >
+                    🐚 Bash / zsh
+                  </button>
+                </div>
               </div>
 
               {/* Command box */}
               <div className="relative rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-950 p-3 font-mono text-[11px] text-slate-200 shadow-inner">
                 <div className="overflow-x-auto whitespace-pre-wrap leading-5 pr-14 text-cyan-300">
-                  {hookInstallCmd}
+                  {installCmd}
                 </div>
                 <button
                   type="button"
-                  onClick={() => handleCopy(hookInstallCmd, "hook")}
+                  onClick={() => handleCopy(installCmd, "hook")}
                   className="absolute top-2.5 right-2.5 flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-200 transition-colors cursor-pointer border border-slate-700"
                 >
                   {copiedKey === "hook" ? (
@@ -668,12 +710,45 @@ export function AddProjectModal(props?: AddProjectModalProps) {
                 </button>
               </div>
 
-              <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1 px-1">
-                <span>Windows Node.js 快捷方式: <code className="font-mono text-slate-600 dark:text-slate-300">{nodeInstallCmd}</code></span>
+              {/* Cross-platform hint */}
+              <p className="text-[10.5px] text-slate-400 px-1 leading-relaxed">
+                {installShell === "powershell" ? (
+                  <>
+                    🪟 当前为 <b className="text-slate-600 dark:text-slate-300">PowerShell</b> 命令 (适用于 Win10/11 / PowerShell 5+)。如使用 <b className="text-slate-600 dark:text-slate-300">Git Bash / WSL / macOS / Linux</b>，请切到
+                    <button
+                      type="button"
+                      onClick={() => setInstallShell("bash")}
+                      className="ml-1 text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                    >
+                      Bash / zsh
+                    </button>
+                    。
+                  </>
+                ) : (
+                  <>
+                    🐚 当前为 <b className="text-slate-600 dark:text-slate-300">Bash / zsh</b> 命令。如使用 <b className="text-slate-600 dark:text-slate-300">Windows PowerShell</b>，请切到
+                    <button
+                      type="button"
+                      onClick={() => setInstallShell("powershell")}
+                      className="ml-1 text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                    >
+                      PowerShell
+                    </button>
+                    。
+                  </>
+                )}
+              </p>
+
+              {/* Node.js fallback (跨平台通用) */}
+              <div className="flex items-center justify-between text-[11px] text-slate-400 pt-2 px-1 border-t border-slate-100 dark:border-slate-800">
+                <span>
+                  备选 (需项目本地有 <code className="font-mono text-slate-600 dark:text-slate-300">scripts/install-hook.js</code>)：
+                  <code className="font-mono text-slate-600 dark:text-slate-300 ml-1">{nodeInstallCmd}</code>
+                </span>
                 <button
                   type="button"
                   onClick={() => handleCopy(nodeInstallCmd, "node")}
-                  className="text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                  className="text-blue-600 dark:text-blue-400 hover:underline cursor-pointer shrink-0 ml-2"
                 >
                   {copiedKey === "node" ? "已复制" : "复制此命令"}
                 </button>
