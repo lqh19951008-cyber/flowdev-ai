@@ -8,6 +8,7 @@ import { TopologyModal } from "@/components/modal/TopologyModal";
 import { DiffModal } from "@/components/modal/DiffModal";
 import { SystemSettingsModal } from "@/components/modal/FeishuConfigModal";
 import { ProjectStatsModal } from "@/components/dashboard/ProjectStatsModal";
+import { AddProjectModal } from "@/components/modal/AddProjectModal";
 import { useFlowStore } from "@/stores/useFlowStore";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -48,6 +49,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       {/* 系统大模型与飞书 Webhook 全局配置模态框 */}
       <SystemSettingsModal />
+
+      {/* 全局代码仓库与项目接入向导模态框 */}
+      <AddProjectModal />
     </main>
   );
 }

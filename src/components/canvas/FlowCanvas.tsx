@@ -69,14 +69,12 @@ function FlowCanvasInner({ showMiniMap = true }: { showMiniMap?: boolean }) {
     appendNodeLog,
     projects,
     selectedProjectId,
-    setSelectedProjectId,
     saveCurrentPolicyToProject,
   } = useFlowStore();
 
   const [isGuideOpen, setIsGuideOpen] = useState(false);
   const [isSavingPolicy, setIsSavingPolicy] = useState(false);
   const [isPolicySaved, setIsPolicySaved] = useState(false);
-  const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
 
   // Right-click context menu states
   const [nodeContextMenu, setNodeContextMenu] = useState<{
@@ -263,16 +261,22 @@ function FlowCanvasInner({ showMiniMap = true }: { showMiniMap?: boolean }) {
 
   const handleDuplicateNode = (node: CustomNode) => {
     const newId = `node-${node.type}-${Date.now()}`;
+    let clonedData: any = {};
+    try {
+      clonedData = typeof structuredClone === "function" ? structuredClone(node.data) : JSON.parse(JSON.stringify(node.data));
+    } catch {
+      clonedData = { ...node.data };
+    }
     const newNode: CustomNode = {
       ...node,
       id: newId,
       position: {
-        x: node.position.x + 45,
-        y: node.position.y + 45,
+        x: (node?.position?.x ?? 0) + 45,
+        y: (node?.position?.y ?? 0) + 45,
       },
       data: {
-        ...JSON.parse(JSON.stringify(node.data)),
-        label: `${node.data.label} (副本)`,
+        ...clonedData,
+        label: `${node?.data?.label ?? "算子"} (副本)`,
         status: "idle",
       },
       selected: true,
@@ -384,43 +388,13 @@ function FlowCanvasInner({ showMiniMap = true }: { showMiniMap?: boolean }) {
 
       {/* Top Floating Project Policy Bar & Breadcrumb */}
       <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-white/95 dark:bg-slate-950/90 border border-slate-200/90 dark:border-slate-800/90 shadow-lg dark:shadow-2xl backdrop-blur-md text-xs text-slate-700 dark:text-slate-300 select-none pointer-events-auto whitespace-nowrap shrink-0">
-        {/* Project Selector Badge */}
-        <div className="relative shrink-0">
-          <button
-            onClick={() => setIsProjectDropdownOpen(!isProjectDropdownOpen)}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 dark:bg-blue-500/20 border border-blue-500/30 text-blue-700 dark:text-blue-300 font-mono font-medium hover:bg-blue-500/20 transition-colors whitespace-nowrap shrink-0"
-            title="点击切换正在编排门禁规则的代码仓库"
-          >
-            <FolderGit2 className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400 shrink-0" />
-            <span className="font-semibold whitespace-nowrap">{selectedProjectId === "all" ? "rxjs (默认)" : selectedProjectId}</span>
-            <ChevronDown className="h-3 w-3 opacity-60 shrink-0" />
-          </button>
-
-          {isProjectDropdownOpen && (
-            <div className="absolute left-0 mt-2 w-56 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 shadow-2xl p-1 z-50 animate-in fade-in zoom-in-95 duration-100">
-              <div className="px-2 py-1 text-[10px] font-semibold text-slate-400 uppercase whitespace-nowrap">
-                切换编排目标仓库
-              </div>
-              {projects.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => {
-                    setSelectedProjectId(p.id);
-                    setIsProjectDropdownOpen(false);
-                  }}
-                  className={cn(
-                    "w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-mono flex items-center justify-between transition-colors whitespace-nowrap",
-                    (selectedProjectId === p.id || (selectedProjectId === "all" && p.id === "rxjs"))
-                      ? "bg-blue-500/15 text-blue-700 dark:text-blue-300 font-bold"
-                      : "text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-900"
-                  )}
-                >
-                  <span className="truncate">{p.id}</span>
-                  <span className="text-[10px] text-slate-400 font-sans ml-2 truncate">{p.name}</span>
-                </button>
-              ))}
-            </div>
-          )}
+        {/* Project Target Badge */}
+        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 dark:bg-blue-500/20 border border-blue-500/30 text-blue-700 dark:text-blue-300 font-mono font-medium whitespace-nowrap shrink-0">
+          <FolderGit2 className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400 shrink-0" />
+          <span className="text-slate-400 font-sans text-[11px]">编排目标:</span>
+          <span className="font-semibold whitespace-nowrap">
+            {selectedProjectId === "all" ? (projects?.[0]?.id ?? "rxjs") : selectedProjectId}
+          </span>
         </div>
 
         {/* Pipeline Step Flow Indicators */}
@@ -447,13 +421,16 @@ function FlowCanvasInner({ showMiniMap = true }: { showMiniMap?: boolean }) {
         {/* 1-Click Deploy Policy to Current Project */}
         <button
           onClick={async () => {
-            const target = selectedProjectId === "all" ? "rxjs" : selectedProjectId;
+            const target = selectedProjectId && selectedProjectId !== "all" ? selectedProjectId : (projects?.[0]?.id ?? "rxjs");
             setIsSavingPolicy(true);
-            const ok = await saveCurrentPolicyToProject(target);
-            setIsSavingPolicy(false);
-            if (ok) {
-              setIsPolicySaved(true);
-              setTimeout(() => setIsPolicySaved(false), 2500);
+            try {
+              const ok = await saveCurrentPolicyToProject?.(target);
+              if (ok) {
+                setIsPolicySaved(true);
+                setTimeout(() => setIsPolicySaved(false), 2500);
+              }
+            } finally {
+              setIsSavingPolicy(false);
             }
           }}
           disabled={isSavingPolicy}

@@ -9,15 +9,15 @@ import { useFlowStore } from "@/stores/useFlowStore";
 
 function PipelineContent() {
   const searchParams = useSearchParams();
-  const setSelectedProjectId = useFlowStore((s) => s.setSelectedProjectId);
-  const setActiveViewMode = useFlowStore((s) => s.setActiveViewMode);
+  const setSelectedProjectId = useFlowStore((s) => s?.setSelectedProjectId);
+  const setActiveViewMode = useFlowStore((s) => s?.setActiveViewMode);
   const [showMiniMap] = useState(true);
 
   useEffect(() => {
-    setActiveViewMode("pipeline");
-    const projectParam = searchParams.get("project");
-    if (projectParam) {
-      setSelectedProjectId(projectParam);
+    setActiveViewMode?.("pipeline");
+    const rawProject = searchParams?.get("project")?.trim() ?? "";
+    if (rawProject && /^[a-zA-Z0-9_-]{1,64}$/.test(rawProject)) {
+      setSelectedProjectId?.(rawProject);
     }
   }, [searchParams, setSelectedProjectId, setActiveViewMode]);
 

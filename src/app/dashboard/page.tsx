@@ -13,15 +13,19 @@ function DashboardContent() {
 
   useEffect(() => {
     setActiveViewMode?.("dashboard");
-    const projectParam = searchParams?.get("project");
-    if (projectParam) {
-      setSelectedProjectId?.(projectParam);
+    const rawProject = searchParams?.get("project")?.trim() ?? "";
+    const isProjectValid = /^[a-zA-Z0-9_-]{1,64}$/.test(rawProject);
+    if (isProjectValid) {
+      setSelectedProjectId?.(rawProject);
+    } else {
+      setSelectedProjectId?.("all");
     }
-    const eventParam =
+    const rawEvent =
       searchParams?.get("eventId") ||
       searchParams?.get("event_id") ||
       searchParams?.get("event");
-    if (eventParam) {
+    const eventParam = rawEvent?.trim() ?? "";
+    if (eventParam && /^[a-zA-Z0-9_.-]{1,64}$/.test(eventParam)) {
       locateEvent?.(eventParam);
     }
   }, [searchParams, setSelectedProjectId, setActiveViewMode, locateEvent]);

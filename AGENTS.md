@@ -143,6 +143,8 @@ app.add_middleware(CORSMiddleware,
   *Action:* FlowDev 安全门禁拦截：检测到高危代码模式（eval/exec/shell模板注入/SQL字符串拼接/硬编码sk-/通配CORS/缺None防御的链式.get），请改用参数化查询、execFile数组参数、显式CORS域名白名单、`or {}`空值防御与Pydantic/Zod强类型校验。
 - **高危动态执行与注入函数检测**: `\b(eval|exec)\s*\(`
   *Action:* 严禁使用 eval() 或 exec() 危险动态执行函数！
+- **禁止在 React 组件中直接访问可能为 null/undefined 的属性**: `(?:const|let)\s+\w+\s*=\s*(?:use\w+\(|useStore\(|props\.|state\.)[^;\n]*\.(?!\?)[a-zA-Z_]\w*`
+  *Action:* 🚫 [FlowDev-Gate] 检测到对可能为 undefined 的数据源直接做属性解构。必须使用可选链 (?.) + 空值合并 (?? '默认值') 兜底，或先做类型守卫 (if (!x) return <Empty/>)。涉及 URL 参数透传时还需白名单校验。详见 .cursorrules/react-ts-null-safety。
 
 ### Project-Specific Agent Skills & Defensive Rules
 #### 1. 防御性可选链与空指针安全防护规范
@@ -274,4 +276,102 @@ Prevent security vulnerabilities arising from untrusted input execution or unsan
 1. Never recommend or generate `eval()`, `exec()`, `Function()`, or `setTimeout` with string arguments.
 2. Always use parameterized queries or ORM query builders (e.g. Prisma, Drizzle, SQLAlchemy) for database interactions.
 3. Validate all incoming payload schemas with Zod, Joi, or Pydantic.
+
+
+#### 4. React/TS 组件空值安全访问与可选链防御规范
+**Summary:** FlowDev 仓库出现 50+ 处 '未处理的 null 异常隐患'，集中在 Dashboard 组件、Modal 表单、Store 状态消费与 URL 参数透传场景。根因是直接对可能为 null/undefined 的 store 数据、props、searchParams、API 响应做属性解构与函数调用，TypeScript 严格模式下编译可过但运行时一旦上游返回空值即触发 Cannot read properties of null/undefined 白屏崩溃。所有可选数据流必须强制使用可选链 + 默认值兜底，并对 URL 参数做白名单校验，禁止将原始 searchParams 直接灌入全局 Store。
+
+---
+name: react-ts-null-safety
+description: 在 FlowDev 仓库编写 React/TypeScript 组件时强制空值安全访问，禁止直接对可能为 null/undefined 的 store/props/URL 参数做属性解构。
+applies_to:
+  - "src/components/**/*.tsx"
+  - "src/stores/**/*.ts"
+  - "src/app/**/*.tsx"
+trigger:
+  - context: "编辑 React 组件渲染逻辑"
+  - context: "消费 zustan / redux / context 提供的可选数据"
+  - context: "读取 useSearchParams / location.search / router.query"
+  - context: "处理 Antd Form 字段值"
+---
+
+# React/TS 空值安全防御规范
+
+## 编码准则（强制）
+
+### 1. Store / Props 数据消费三原则
+- **可选链优先**：访问对象属性前一律用 `?.`
+- **空值合并兜底**：渲染文本用 `value ?? '默认值'`
+- **类型守卫渲染**：对象为 null 时返回 `<Skeleton />` 或 `<Empty />`，禁止返回半个组件
+
+### 2. URL 参数透传白名单校验
+- 任何 `params.get(...)` 的结果写入全局 Store / 透传给下游 API 前，必须校验：
+  - 非空字符串
+  - 长度上限（建议 ≤ 64）
+  - 字符集白名单正则（如 `/^[a-zA-Z0-9_-]+$/`）
+- 失败时回退默认值或 `null`，绝不静默放行
+
+### 3. Antd Form 字段安全读取
+- `form.getFieldValue(key)` 必须 `?? ''` 或 `?? null` 后再使用
+- 提交前对所有必填字段做非空 + 格式校验，校验失败 `return` 并提示用户
+- 禁止 `fieldA + fieldB` 字符串拼接，可能产出 `'undefinedxxx'`
+
+### 4. Zustand Selector 安全消费
+```ts
+// ✅ 正确：先 select 字段，再做空值守卫
+const projectId = useFlowStore(s => s.currentProject?.id);
+if (!projectId) return <Empty description="请选择项目" />;
+```
+
+### 5. useState 未使用 setter 处理
+- 解构出但未使用的 setter：直接改为 `const xxx = 默认值;`
+- 若后续会用到：保留并加 `// eslint-disable-next-line @typescript-eslint/no-unused-vars`
+
+## 反模式（禁止）
+
+```tsx
+// ❌ 直接属性访问
+{user.name}
+{project.owner.avatar}
+{config.feishu.webhook}
+
+// ❌ 原始 searchParams 透传
+setSelectedProjectId(params.get('project'));
+
+// ❌ 表单字段裸拼接
+const url = webhook + '/hook';
+
+// ❌ 渲染函数返回可能为 undefined 的 JSX 片段
+return data?.map(...) // data 为 null 时 React 报 'map is not function'
+```
+
+## 正模式（推荐）
+
+```tsx
+// ✅ 三件套：可选链 + 兜底 + 守卫
+const name = user?.name ?? '匿名用户';
+if (!data) return <Skeleton />;
+return data.map(item => <Item key={item.id} {...item} />);
+
+// ✅ URL 参数白名单
+const safeId = (() => {
+  const raw = params.get('id');
+  return raw && /^p-[a-z0-9]{1,12}$/.test(raw) ? raw : null;
+})();
+
+// ✅ 表单字段非空校验
+const url = form.getFieldValue('webhook')?.trim();
+if (!url) { message.error('必填'); return; }
+```
+
+## 自检清单（提交前必看）
+- [ ] 所有 `?.` 出现的地方是否搭配了 `??` 兜底
+- [ ] 所有 useSearchParams 结果是否经过白名单校验
+- [ ] 所有 zustand selector 是否处理了 undefined 情况
+- [ ] 所有 form.getFieldValue 是否做了非空判断
+- [ ] 是否存在解构出但未使用的 setter（需清理）
+
+## 关联门禁
+- pre-commit: `no-direct-property-access`
+- CI: ESLint `@typescript-eslint/no-non-null-assertion` + 自定义 `no-raw-searchparams-in-store`
 <!-- FLOWDEV_RULES_END -->

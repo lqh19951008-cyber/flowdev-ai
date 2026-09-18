@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import {
   X,
   Terminal,
@@ -25,7 +26,9 @@ export function IntegrationGuideModal({
   isOpen,
   onClose,
 }: IntegrationGuideModalProps) {
-  const { selectedProjectId, projects } = useFlowStore();
+  const selectedProjectId = useFlowStore((s) => s?.selectedProjectId);
+  const projects = useFlowStore((s) => s?.projects);
+  const [mounted, setMounted] = useState(false);
   const [serverUrl, setServerUrl] = useState("http://127.0.0.1:8000");
   const [activeTab, setActiveTab] = useState<"git_hook" | "husky" | "ci_cd">(
     "git_hook"
@@ -33,23 +36,29 @@ export function IntegrationGuideModal({
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
     if (typeof window !== "undefined") {
-      const currentHost = window.location.hostname;
-      const protocol = window.location.protocol;
+      const currentHost = window?.location?.hostname ?? "";
+      const protocol = window?.location?.protocol ?? "http:";
       if (currentHost === "localhost" || currentHost === "127.0.0.1") {
         setServerUrl("http://127.0.0.1:8000");
       } else {
-        setServerUrl(`${protocol}//${window.location.host}`);
+        const host = window?.location?.host ?? "127.0.0.1:8000";
+        setServerUrl(`${protocol}//${host}`);
       }
     }
   }, [isOpen]);
 
-  if (!isOpen) return null;
+  if (!isOpen || !mounted) return null;
+  if (typeof document === "undefined" || !document?.body) return null;
 
   const currentProjectName =
     selectedProjectId === "all"
-      ? projects[0]?.id || "my-repo"
-      : selectedProjectId;
+      ? (projects?.[0]?.id ?? "my-repo")
+      : (selectedProjectId ?? "my-repo");
 
   const handleCopy = (text: string, key: string) => {
     navigator.clipboard.writeText(text);
@@ -92,11 +101,17 @@ flowdev_gate_check:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "master"'`;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-150">
-      <div className="relative w-full max-w-2xl rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-6 shadow-2xl space-y-5 text-slate-800 dark:text-slate-200 select-none max-h-[92vh] overflow-y-auto">
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+      onClick={onClose}
+    >
+      <div
+        className="relative w-full max-w-2xl max-h-[90vh] flex flex-col rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 shadow-2xl text-slate-800 dark:text-slate-200 select-none overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+        <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 px-6 py-4 shrink-0 bg-slate-50/70 dark:bg-slate-900/50">
           <div className="flex items-center gap-2.5">
             <div className="h-9 w-9 rounded-xl bg-gradient-to-tr from-cyan-600 to-blue-600 flex items-center justify-center text-white shadow-md shadow-cyan-500/20 shrink-0">
               <Terminal className="h-5 w-5" />
@@ -121,43 +136,45 @@ flowdev_gate_check:
           </button>
         </div>
 
-        {/* Server URL Input Banner */}
-        <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 space-y-2">
-          <div className="flex items-center justify-between text-xs">
-            <span className="font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-              <Radio className="h-3.5 w-3.5 text-emerald-500 animate-pulse" />
-              当前 FlowDev 服务端部署地址 (Server URL):
-            </span>
-            <span className="text-[11px] text-slate-400">
-              当前绑定仓库: <code className="font-mono text-cyan-600 dark:text-cyan-400">{currentProjectName}</code>
-            </span>
+        {/* Scrollable Body Content */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-5">
+          {/* Server URL Input Banner */}
+          <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                <Radio className="h-3.5 w-3.5 text-emerald-500 animate-pulse" />
+                当前 FlowDev 服务端部署地址 (Server URL):
+              </span>
+              <span className="text-[11px] text-slate-400">
+                当前绑定仓库: <code className="font-mono text-cyan-600 dark:text-cyan-400">{currentProjectName}</code>
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={serverUrl}
+                onChange={(e) => setServerUrl(e.target.value)}
+                className="flex-1 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-xs font-mono text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+                placeholder="https://flowdev.yourcompany.com"
+              />
+              <button
+                onClick={() => handleCopy(serverUrl, "url")}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-300 transition-colors cursor-pointer"
+              >
+                {copiedKey === "url" ? (
+                  <>
+                    <Check className="h-3.5 w-3.5 text-emerald-500" />
+                    <span>已复制</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="h-3.5 w-3.5" />
+                    <span>复制地址</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <input
-              type="text"
-              value={serverUrl}
-              onChange={(e) => setServerUrl(e.target.value)}
-              className="flex-1 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-xs font-mono text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-              placeholder="https://flowdev.yourcompany.com"
-            />
-            <button
-              onClick={() => handleCopy(serverUrl, "url")}
-              className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-300 transition-colors cursor-pointer"
-            >
-              {copiedKey === "url" ? (
-                <>
-                  <Check className="h-3.5 w-3.5 text-emerald-500" />
-                  <span>已复制</span>
-                </>
-              ) : (
-                <>
-                  <Copy className="h-3.5 w-3.5" />
-                  <span>复制地址</span>
-                </>
-              )}
-            </button>
-          </div>
-        </div>
 
         {/* Integration Mode Tabs */}
         <div className="flex items-center gap-1 border-b border-slate-200 dark:border-slate-800 pb-2">
@@ -303,8 +320,10 @@ flowdev_gate_check:
           </div>
         )}
 
+        </div>
+
         {/* Footer */}
-        <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs text-slate-500">
+        <div className="px-6 py-3.5 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between text-xs text-slate-500 shrink-0 bg-slate-50/70 dark:bg-slate-900/50">
           <div className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 font-medium">
             <ShieldCheck className="h-4 w-4" />
             <span>接入后代码审查由 FlowDev-AI 自动化闭环守护</span>
@@ -317,6 +336,7 @@ flowdev_gate_check:
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

@@ -18,9 +18,11 @@ import {
   Sun,
   Moon,
   Settings as SettingsIcon,
+  Sparkles,
+  Plus,
 } from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useFlowStore } from "@/stores/useFlowStore";
 import { useTheme } from "@/components/providers/HeroUIProvider";
 import { WORKFLOW_PRESETS } from "@/lib/presets";
@@ -29,6 +31,7 @@ import { cn } from "@/lib/utils";
 
 export function Header() {
   const pathname = usePathname();
+  const router = useRouter();
   const {
     isDrawerOpen,
     toggleDrawer,
@@ -47,8 +50,9 @@ export function Header() {
     activeViewMode,
     setActiveViewMode,
     setSettingsModalOpen,
-  } = useFlowStore();
-  const { theme, toggleTheme } = useTheme();
+    setAddProjectModalOpen,
+  } = useFlowStore() ?? {};
+  const { theme, toggleTheme } = useTheme() ?? {};
 
   const [isPresetMenuOpen, setIsPresetMenuOpen] = useState(false);
   const [isProjectMenuOpen, setIsProjectMenuOpen] = useState(false);
@@ -56,27 +60,17 @@ export function Header() {
   const [isSavingPolicy, setIsSavingPolicy] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-
   const presetMenuRef = useRef<HTMLDivElement>(null);
   const projectMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetchProjects?.();
-    if (typeof window !== "undefined" && process.env.NODE_ENV === "development") {
-      (window as any).__setActiveViewMode = setActiveViewMode;
-    }
-    return () => {
-      if (typeof window !== "undefined") {
-        try {
-          delete (window as any).__setActiveViewMode;
-        } catch (e) {}
-      }
-    };
-  }, [fetchProjects, setActiveViewMode]);
+  }, [fetchProjects]);
 
   // Close menus when clicking outside
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
+      if (!e?.target) return;
       if (
         presetMenuRef.current &&
         !presetMenuRef.current.contains(e.target as Node)
@@ -115,11 +109,14 @@ export function Header() {
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
-    await Promise.all([
-      fetchProjects(),
-      fetchRecentEvents(selectedProjectId === "all" ? undefined : selectedProjectId),
-    ]);
-    setIsRefreshing(false);
+    try {
+      await Promise.all([
+        fetchProjects?.(),
+        fetchRecentEvents?.(selectedProjectId === "all" ? undefined : selectedProjectId),
+      ]);
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   return (
@@ -157,14 +154,14 @@ export function Header() {
 
         <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
 
-        {/* Navigation Tabs (Next.js Link Routes) - Clean 2-Pillar Core */}
+        {/* Navigation Tabs (Next.js Link Routes) - 3-Pillar Core */}
         <nav className="flex items-center bg-slate-100 dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-800 rounded-lg p-0.5 shrink-0">
           <Link
-            href="/dashboard"
-            onClick={() => setActiveViewMode("dashboard")}
+            href={selectedProjectId && selectedProjectId !== "all" ? `/dashboard?project=${encodeURIComponent(selectedProjectId)}` : "/dashboard"}
+            onClick={() => setActiveViewMode?.("dashboard")}
             className={cn(
               "flex items-center gap-1.5 px-3 py-1 rounded-md text-xs transition-all whitespace-nowrap font-medium",
-              pathname === "/dashboard" || pathname === "/" || activeViewMode === "dashboard"
+              (pathname === "/dashboard" || pathname === "/") && activeViewMode !== "skills"
                 ? "bg-blue-600 text-white font-semibold shadow-sm shadow-blue-500/30"
                 : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
             )}
@@ -175,11 +172,11 @@ export function Header() {
           </Link>
 
           <Link
-            href="/pipeline"
-            onClick={() => setActiveViewMode("pipeline")}
+            href={selectedProjectId && selectedProjectId !== "all" ? `/pipeline?project=${encodeURIComponent(selectedProjectId)}` : `/pipeline?project=${encodeURIComponent(projects?.[0]?.id ?? "rxjs")}`}
+            onClick={() => setActiveViewMode?.("pipeline")}
             className={cn(
               "flex items-center gap-1.5 px-3 py-1 rounded-md text-xs transition-all whitespace-nowrap font-medium",
-              pathname === "/pipeline"
+              pathname === "/pipeline" || activeViewMode === "pipeline"
                 ? "bg-blue-600 text-white font-semibold shadow-sm shadow-blue-500/30"
                 : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
             )}
@@ -187,6 +184,21 @@ export function Header() {
           >
             <Sliders className="h-3.5 w-3.5 shrink-0" />
             <span>门禁编排</span>
+          </Link>
+
+          <Link
+            href={selectedProjectId && selectedProjectId !== "all" ? `/skills?project=${encodeURIComponent(selectedProjectId)}` : "/skills"}
+            onClick={() => setActiveViewMode?.("skills")}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1 rounded-md text-xs transition-all whitespace-nowrap font-medium",
+              pathname === "/skills" || activeViewMode === "skills"
+                ? "bg-gradient-to-r from-amber-500 via-indigo-600 to-cyan-600 text-white font-semibold shadow-sm shadow-amber-500/25"
+                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
+            )}
+            title="AI 智能体研发规范与 Skill 资产治理中心"
+          >
+            <Sparkles className="h-3.5 w-3.5 shrink-0 text-amber-300" />
+            <span>Skill 资产库</span>
           </Link>
         </nav>
 
@@ -212,7 +224,7 @@ export function Header() {
           {isProjectMenuOpen && (
             <div className="absolute left-0 mt-1.5 w-72 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 shadow-2xl p-2 z-50 backdrop-blur animate-in fade-in zoom-in-95 duration-100">
               <div className="flex items-center justify-between px-1.5 pb-1.5 mb-1.5 border-b border-slate-100 dark:border-slate-800 text-[11px] font-semibold text-slate-500">
-                <span>{pathname === "/pipeline" ? "🎯 切换编排目标仓库" : "📦 选择监控代码仓库"}</span>
+                <span>{pathname === "/pipeline" ? "🎯 切换编排目标仓库" : pathname === "/skills" ? "✨ 切换 Skill 治理目标仓库" : "📦 选择监控代码仓库"}</span>
                 <span className="font-mono text-[10px] text-slate-400">{projects?.length ?? 0} 个仓库</span>
               </div>
               <div className="space-y-1 max-h-64 overflow-y-auto pr-0.5">
@@ -221,6 +233,8 @@ export function Header() {
                     onClick={() => {
                       setSelectedProjectId?.("all");
                       setIsProjectMenuOpen(false);
+                      const targetPath = pathname === "/skills" ? "/skills" : "/dashboard";
+                      router?.push?.(targetPath);
                     }}
                     className={cn(
                       "w-full text-left px-2.5 py-1.5 rounded-lg flex items-center justify-between text-xs transition-colors cursor-pointer",
@@ -255,6 +269,8 @@ export function Header() {
                       onClick={() => {
                         setSelectedProjectId?.(proj.id);
                         setIsProjectMenuOpen(false);
+                        const targetPath = pathname === "/pipeline" ? "/pipeline" : pathname === "/skills" ? "/skills" : "/dashboard";
+                        router?.push?.(`${targetPath}?project=${encodeURIComponent(proj.id)}`);
                       }}
                       className={cn(
                         "w-full text-left px-2.5 py-2 rounded-lg flex items-start justify-between text-xs transition-colors cursor-pointer",
@@ -288,6 +304,21 @@ export function Header() {
                   );
                 })}
               </div>
+
+              {/* Bottom Quick Action: Add Project */}
+              <div className="pt-1.5 mt-1.5 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsProjectMenuOpen(false);
+                    setAddProjectModalOpen?.(true);
+                  }}
+                  className="w-full py-1.5 px-2 rounded-lg bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 dark:hover:bg-blue-900/60 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800/60 flex items-center justify-center gap-1.5 text-xs font-semibold transition-all cursor-pointer shadow-xs"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>接入新代码仓库 / 项目</span>
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -315,7 +346,7 @@ export function Header() {
 
           {/* Live Guard Notification Bell */}
           <button
-            onClick={() => setLiveFeedOpen(!isLiveFeedOpen)}
+            onClick={() => setLiveFeedOpen?.(!isLiveFeedOpen)}
             className={cn(
               "relative flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors shrink-0",
               isLiveFeedOpen
@@ -326,14 +357,14 @@ export function Header() {
           >
             <div className="relative">
               <Bell className="h-3.5 w-3.5" />
-              {unreadEventsCount > 0 && (
+              {(unreadEventsCount ?? 0) > 0 && (
                 <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5 items-center justify-center rounded-full bg-rose-500 ring-2 ring-white dark:ring-slate-950 animate-pulse" />
               )}
             </div>
             <span>动态</span>
-            {unreadEventsCount > 0 && (
+            {(unreadEventsCount ?? 0) > 0 && (
               <span className="px-1.5 py-0.2 rounded-full bg-rose-500 text-[10px] font-bold text-white">
-                {unreadEventsCount > 9 ? "9+" : unreadEventsCount}
+                {(unreadEventsCount ?? 0) > 9 ? "9+" : unreadEventsCount}
               </span>
             )}
           </button>
@@ -342,7 +373,7 @@ export function Header() {
 
           {/* System Settings Button (LLM API & Feishu) */}
           <button
-            onClick={() => setSettingsModalOpen(true, "llm")}
+            onClick={() => setSettingsModalOpen?.(true, "llm")}
             className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-900 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
             title="配置 AI 大模型 API Key / Base URL 与飞书群机器人 Webhook"
           >
@@ -352,7 +383,7 @@ export function Header() {
 
           {/* Theme Toggle Button (Light / Dark) */}
           <button
-            onClick={toggleTheme}
+            onClick={() => toggleTheme?.()}
             className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-900 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
             title={theme === "dark" ? "切换至浅色模式" : "切换至深色模式"}
           >
@@ -457,7 +488,7 @@ export function Header() {
 
           {/* System Settings Button */}
           <button
-            onClick={() => setSettingsModalOpen(true, "llm")}
+            onClick={() => setSettingsModalOpen?.(true, "llm")}
             className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-900 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
             title="配置 AI 大模型 API Key / Base URL 与飞书群机器人 Webhook"
           >
@@ -467,7 +498,7 @@ export function Header() {
 
           {/* Theme Toggle Button (Light / Dark) */}
           <button
-            onClick={toggleTheme}
+            onClick={() => toggleTheme?.()}
             className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-900 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
             title={theme === "dark" ? "切换至浅色模式" : "切换至深色模式"}
           >
@@ -480,7 +511,7 @@ export function Header() {
 
           {/* Toggle Property Drawer Button */}
           <button
-            onClick={() => toggleDrawer()}
+            onClick={() => toggleDrawer?.()}
             className={cn(
               "p-1.5 rounded-lg border border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors shrink-0",
               isDrawerOpen && "bg-slate-200 dark:bg-slate-800 text-slate-900 dark:text-slate-100 border-slate-300 dark:border-slate-700"

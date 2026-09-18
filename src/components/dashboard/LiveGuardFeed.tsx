@@ -251,7 +251,7 @@ export function LiveGuardFeed() {
             </div>
 
             {/* Event List */}
-            <div className="flex-1 overflow-y-auto space-y-2 py-3 pr-1">
+            <div className="flex-1 overflow-y-auto space-y-2 py-2 px-1">
               {recentEvents.length === 0 ? (
                 <div className="text-center py-8 text-slate-400 dark:text-slate-500 text-xs">
                   暂无拦截事件记录。在任何接入项目中运行 git commit 将在此实时播报。
@@ -267,11 +267,11 @@ export function LiveGuardFeed() {
                         locateEvent(event.id);
                       }}
                       className={cn(
-                        "p-2.5 rounded-xl border text-xs cursor-pointer transition-all hover:scale-[1.01] shadow-xs relative group",
+                        "p-2.5 rounded-xl border text-xs cursor-pointer transition-colors shadow-xs relative group",
                         event.passed
-                          ? "bg-slate-50/80 dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 hover:border-emerald-500/40 hover:shadow-md"
-                          : "bg-rose-50/60 dark:bg-rose-950/20 border-rose-200 dark:border-rose-900/40 hover:border-rose-500/60 hover:shadow-md",
-                        !isRead && "ring-1 ring-blue-500/40 bg-blue-50/30 dark:bg-blue-950/20"
+                          ? "bg-slate-50/80 dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 hover:bg-slate-100/90 dark:hover:bg-slate-800/80 hover:border-emerald-500/50"
+                          : "bg-rose-50/60 dark:bg-rose-950/20 border-rose-200 dark:border-rose-900/40 hover:bg-rose-50 dark:hover:bg-rose-950/40 hover:border-rose-500/60",
+                        !isRead && "ring-1 ring-inset ring-blue-500/40 bg-blue-50/30 dark:bg-blue-950/20"
                       )}
                       title="点击定位到该条审计详情与消息"
                     >

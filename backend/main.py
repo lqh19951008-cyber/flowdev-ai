@@ -22,9 +22,20 @@ if hasattr(sys.stderr, "reconfigure"):
     except Exception:
         pass
 
-from fastapi import FastAPI
+from typing import Optional, Literal, Dict, Any, List
+from pydantic import BaseModel, Field
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, PlainTextResponse
+
+class CreateProjectRequest(BaseModel):
+    id: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
+    name: Optional[str] = Field(None, max_length=128)
+    description: Optional[str] = Field(None, max_length=256)
+    failure_action: Optional[Literal["block_commit", "warn_only", "disabled"]] = "block_commit"
+    preset_id: Optional[str] = Field(None, max_length=64)
+    policy_dag: Optional[Dict[str, Any]] = None
+
 
 from pathlib import Path
 from config import settings
@@ -143,6 +154,31 @@ async def cli_scan(payload: CliScanRequest):
 async def list_projects():
     """Lists all monitored projects accompanied by pass rate and total scans."""
     return DatabaseService.list_projects_with_stats()
+
+
+@app.post("/api/projects")
+async def create_project(payload: CreateProjectRequest):
+    """Creates or connects a new monitored project."""
+    project = DatabaseService.create_project(
+        project_id=payload.id,
+        name=payload.name,
+        description=payload.description,
+        failure_action=payload.failure_action or "block_commit",
+        preset_id=payload.preset_id,
+        policy_dag=payload.policy_dag,
+    )
+    return {"success": True, "project": project}
+
+
+@app.delete("/api/projects/{project_id}")
+async def delete_project(project_id: str):
+    """Deletes a project and removes its audit history."""
+    clean_id = project_id.strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="Invalid project_id")
+    deleted = DatabaseService.delete_project(clean_id)
+    return {"success": deleted, "project_id": clean_id}
+
 
 
 @app.get("/api/projects/{project_id}/events")

@@ -35,6 +35,14 @@ body {
   color: #94a3b8 !important;
 }
 
+/* React Flow Node Selection outline reset to prevent overflowing borders */
+.react-flow__node.selected,
+.react-flow__node:focus,
+.react-flow__node:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
 /* Custom Scrollbars */
 ::-webkit-scrollbar {
   width: 5px;

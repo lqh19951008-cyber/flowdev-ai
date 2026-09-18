@@ -26,16 +26,20 @@ import {
   Zap,
   Power,
   Target,
+  Plus,
+  Trash2,
+  GripVertical,
 } from "lucide-react";
 import { Chip } from "@heroui/react";
+import { useRouter } from "next/navigation";
 import { useFlowStore } from "@/stores/useFlowStore";
 import { cn, formatTime, formatRelativeTime, formatDate } from "@/lib/utils";
 import { IntegrationGuideModal } from "@/components/modal/IntegrationGuideModal";
 import { RuleEvolutionModal } from "@/components/modal/RuleEvolutionModal";
-import { ScanEventItem } from "@/types/flow";
-
+import { ScanEventItem, ProjectItem } from "@/types/flow";
 
 export function QualityDashboardView() {
+  const router = useRouter();
   const {
     projects,
     selectedProjectId,
@@ -45,8 +49,6 @@ export function QualityDashboardView() {
     markEventAsRead,
     markAllEventsAsRead,
     toggleEventRead,
-    isEventRead,
-    unreadEventsCount,
     highlightedEventId,
     setHighlightedEventId,
     fetchProjects,
@@ -54,6 +56,9 @@ export function QualityDashboardView() {
     fetchRecentEvents,
     setActiveViewMode,
     setSettingsModalOpen,
+    setAddProjectModalOpen,
+    deleteProject,
+    reorderProjects,
   } = useFlowStore();
 
   const [filterPassed, setFilterPassed] = useState<string>("all");
@@ -65,6 +70,14 @@ export function QualityDashboardView() {
   const [ruleModalEvent, setRuleModalEvent] = useState<ScanEventItem | null>(null);
   const [modeNotification, setModeNotification] = useState<string | null>(null);
   const [isUpdatingMode, setIsUpdatingMode] = useState<string | null>(null);
+  const [quickRuleText, setQuickRuleText] = useState<string>("");
+
+  // Multi-project Delete and Drag-and-drop state
+  const [projectPendingDelete, setProjectPendingDelete] = useState<ProjectItem | null>(null);
+  const [isDeletingProject, setIsDeletingProject] = useState(false);
+  const [draggedProjectId, setDraggedProjectId] = useState<string | null>(null);
+  const [dragOverProjectId, setDragOverProjectId] = useState<string | null>(null);
+
 
   const handleToggleGateMode = async (
     projectId: string,
@@ -72,7 +85,7 @@ export function QualityDashboardView() {
   ) => {
     setIsUpdatingMode(projectId);
     try {
-      await updateProjectGateMode(projectId, mode);
+      await updateProjectGateMode?.(projectId, mode);
       const modeLabel =
         mode === "warn_only"
           ? "⚠️ 仅提示不阻断模式（提交 100% 放行，不卡开发！）"
@@ -81,6 +94,8 @@ export function QualityDashboardView() {
           : "🛑 严格阻断模式（拦截严重隐患）";
       setModeNotification(`仓库 [${projectId}] 门禁已切换为：${modeLabel}`);
       setTimeout(() => setModeNotification(null), 5000);
+    } catch (e) {
+      console.error("Failed to toggle gate mode", e);
     } finally {
       setIsUpdatingMode(null);
     }
@@ -96,81 +111,126 @@ export function QualityDashboardView() {
     setIsRuleModalOpen(true);
   };
 
+  const handleDragStart = (e: React.DragEvent, projId: string) => {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", projId);
+    setDraggedProjectId(projId);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  };
+
+  const handleDragEnter = (projId: string) => {
+    if (draggedProjectId && draggedProjectId !== projId) {
+      setDragOverProjectId(projId);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent, targetProjId: string) => {
+    e.preventDefault();
+    if (!draggedProjectId || draggedProjectId === targetProjId) {
+      setDraggedProjectId(null);
+      setDragOverProjectId(null);
+      return;
+    }
+
+    const currentList = [...(projects ?? [])];
+    const fromIndex = currentList.findIndex((p) => p.id === draggedProjectId);
+    const toIndex = currentList.findIndex((p) => p.id === targetProjId);
+
+    if (fromIndex >= 0 && toIndex >= 0) {
+      const [moved] = currentList.splice(fromIndex, 1);
+      currentList.splice(toIndex, 0, moved);
+      reorderProjects?.(currentList);
+    }
+
+    setDraggedProjectId(null);
+    setDragOverProjectId(null);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedProjectId(null);
+    setDragOverProjectId(null);
+  };
+
 
   useEffect(() => {
-    fetchProjects();
-    fetchRecentEvents(selectedProjectId === "all" ? undefined : selectedProjectId);
+    fetchProjects?.();
+    fetchRecentEvents?.(selectedProjectId === "all" ? undefined : selectedProjectId);
   }, [selectedProjectId, fetchProjects, fetchRecentEvents]);
 
-  // Real-time location effect when an event is selected in live feed / activity drawer
+  // Handle highlightedEventId auto-scrolling & auto-expansion
   useEffect(() => {
     if (!highlightedEventId) return;
 
-    setSelectedEventId(highlightedEventId);
-
-    const target = recentEvents.find((e) => e?.id === highlightedEventId);
-    if (target) {
-      if (selectedProjectId !== "all" && target?.project_id !== selectedProjectId) {
-        setSelectedProjectId(target?.project_id);
-      }
-      if (filterPassed !== "all") {
-        setFilterPassed("all");
-      }
-      if (searchKeyword) {
-        setSearchKeyword("");
-      }
-    }
+    // Ensure filters don't hide the targeted audit event
+    setFilterPassed("all");
+    setSearchKeyword("");
 
     const timer = setTimeout(() => {
-      const el = document.getElementById(`audit-event-${highlightedEventId}`);
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      const targetElement =
+        document.getElementById(`audit-event-${highlightedEventId}`) ||
+        document.getElementById(`event-card-${highlightedEventId}`);
+      if (targetElement) {
+        targetElement.scrollIntoView({ behavior: "smooth", block: "center" });
       }
+      setSelectedEventId(highlightedEventId);
     }, 150);
 
-    const clearTimer = setTimeout(() => {
-      setHighlightedEventId(null);
-    }, 4500);
+    const clearPulseTimer = setTimeout(() => {
+      setHighlightedEventId?.(null);
+    }, 5000);
 
     return () => {
       clearTimeout(timer);
-      clearTimeout(clearTimer);
+      clearTimeout(clearPulseTimer);
     };
-  }, [highlightedEventId, recentEvents, selectedProjectId, filterPassed, searchKeyword, setSelectedProjectId, setHighlightedEventId]);
+  }, [highlightedEventId, recentEvents, selectedProjectId, setHighlightedEventId]);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
-    await Promise.all([
-      fetchProjects(),
-      fetchRecentEvents(selectedProjectId === "all" ? undefined : selectedProjectId),
-    ]);
-    setIsRefreshing(false);
+    try {
+      await Promise.all([
+        fetchProjects?.(),
+        fetchRecentEvents?.(selectedProjectId === "all" ? undefined : selectedProjectId),
+      ]);
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
+  // Safe snapshots
+  const safeProjects = projects ?? [];
+  const safeEvents = recentEvents ?? [];
+  const safeReadIds = readEventIds ?? [];
+
   // Aggregate statistics
-  const totalScans = projects.reduce((acc, p) => acc + p.total_scans, 0);
-  const totalPassed = projects.reduce((acc, p) => acc + p.passed_scans, 0);
-  const totalBlocked = totalScans - totalPassed;
+  const totalScans = safeProjects.reduce((acc, p) => acc + (p?.total_scans ?? 0), 0);
+  const totalPassed = safeProjects.reduce((acc, p) => acc + (p?.passed_scans ?? 0), 0);
+  const totalBlocked = Math.max(0, totalScans - totalPassed);
   const overallPassRate = totalScans > 0 ? ((totalPassed / totalScans) * 100).toFixed(1) : "100.0";
 
   // Unread count within the selected project scope
-  const scopedEvents = recentEvents.filter(
-    (ev) => selectedProjectId === "all" || ev.project_id === selectedProjectId
+  const scopedEvents = safeEvents.filter(
+    (ev) => selectedProjectId === "all" || ev?.project_id === selectedProjectId
   );
-  const unreadScopedCount = scopedEvents.filter((ev) => !readEventIds.includes(ev.id)).length;
+  const unreadScopedCount = scopedEvents.filter((ev) => !safeReadIds.includes(ev?.id ?? "")).length;
 
   // Filtered events
   const filteredEvents = scopedEvents.filter((ev) => {
-    const isRead = readEventIds.includes(ev.id);
+    if (!ev) return false;
+    const isRead = safeReadIds.includes(ev?.id ?? "");
     if (filterPassed === "unread" && isRead) return false;
     if (filterPassed === "passed" && !ev.passed) return false;
     if (filterPassed === "blocked" && ev.passed) return false;
-    if (searchKeyword.trim()) {
-      const q = searchKeyword.toLowerCase();
-      const matchProject = ev.project_id.toLowerCase().includes(q);
-      const matchCommitter = ev.committer.toLowerCase().includes(q);
-      const matchSummary = ev.summary.toLowerCase().includes(q);
-      const matchIssue = ev.critical_issues.some((i) => i.toLowerCase().includes(q));
+    const q = (searchKeyword ?? "").trim().toLowerCase();
+    if (q.length > 0) {
+      const matchProject = (ev?.project_id ?? "").toLowerCase().includes(q);
+      const matchCommitter = (ev?.committer ?? "").toLowerCase().includes(q);
+      const matchSummary = (ev?.summary ?? "").toLowerCase().includes(q);
+      const matchIssue = (ev?.critical_issues ?? []).some((i) => (i ?? "").toLowerCase().includes(q));
       if (!matchProject && !matchCommitter && !matchSummary && !matchIssue) return false;
     }
     return true;
@@ -252,7 +312,7 @@ export function QualityDashboardView() {
             <FolderGit2 className="h-4 w-4 text-cyan-500 dark:text-cyan-400" />
           </div>
           <div className="text-2xl font-bold text-slate-900 dark:text-slate-100 mt-1.5 font-mono">
-            {projects.length}
+            {safeProjects.length}
             <span className="text-xs font-normal text-slate-500 ml-1.5 font-sans">个项目</span>
           </div>
           <div className="text-[11px] text-slate-500 mt-1 flex items-center gap-1">
@@ -275,87 +335,145 @@ export function QualityDashboardView() {
           </div>
         </div>
 
-        <div className="p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900/50 shadow-sm hover:shadow-md hover:border-rose-400/40 dark:hover:border-slate-700 transition-all">
+        <div className="p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900/50 shadow-sm hover:shadow-md hover:border-blue-400/40 dark:hover:border-slate-700 transition-all">
           <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-            <span>拦截致命崩溃隐患</span>
-            <AlertTriangle className="h-4 w-4 text-rose-500 dark:text-rose-400" />
+            <span>成功放行次数</span>
+            <CheckCheck className="h-4 w-4 text-emerald-500 dark:text-emerald-400" />
           </div>
-          <div className="text-2xl font-bold text-rose-600 dark:text-rose-400 mt-1.5 font-mono">
-            {totalBlocked}
-            <span className="text-xs font-normal text-slate-500 ml-1.5 font-sans">次拦截</span>
+          <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1.5 font-mono">
+            {totalPassed}
+            <span className="text-xs font-normal text-slate-500 ml-1.5 font-sans">次</span>
           </div>
-          <div className="text-[11px] text-rose-600/90 dark:text-rose-400/90 mt-1 font-medium">
-            已在提交入库前精准阻止
+          <div className="text-[11px] text-slate-500 mt-1">
+            通过门禁质量卡点
           </div>
         </div>
 
-        <div className="p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900/50 shadow-sm hover:shadow-md hover:border-emerald-400/40 dark:hover:border-slate-700 transition-all">
+        <div className="p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900/50 shadow-sm hover:shadow-md hover:border-blue-400/40 dark:hover:border-slate-700 transition-all">
           <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-            <span>全团队提交安全通过率</span>
-            <TrendingUp className="h-4 w-4 text-emerald-500 dark:text-emerald-400" />
+            <span>全团队综合通过率</span>
+            <TrendingUp className="h-4 w-4 text-purple-500 dark:text-purple-400" />
           </div>
-          <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1.5 font-mono">
+          <div className="text-2xl font-bold text-purple-600 dark:text-purple-400 mt-1.5 font-mono">
             {overallPassRate}%
           </div>
-          <div className="text-[11px] text-emerald-600/90 dark:text-emerald-400/90 mt-1 font-medium">
-            零阻断缺陷 & 单测验证合格
+          <div className="text-[11px] text-slate-500 mt-1">
+            已阻断隐患 {totalBlocked} 次
           </div>
         </div>
       </div>
 
-      {/* Monitored Repositories & Active Policy Cards */}
+      {/* Multi-Project Governance & Health Overview Grid */}
       <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-200 flex items-center gap-2">
-            <Layers className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
-            各仓库健康度与门禁策略配置
-          </h2>
-          <span className="text-xs text-slate-500 dark:text-slate-400">
-            点击项目卡片可切换过滤审计流水，或进入流水线定制门禁规则
-          </span>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+              <FolderGit2 className="h-4 w-4 text-blue-600 dark:text-cyan-400" />
+              <span>多仓库质量健康度矩阵</span>
+            </h2>
+            <span className="text-xs font-mono text-slate-400">
+              ({safeProjects.length} 个代码库)
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-slate-500 hidden lg:inline">
+              按住手柄可拖拽排序卡片 · 点击卡片切换过滤审计流水
+            </span>
+            <button
+              type="button"
+              onClick={() => setAddProjectModalOpen?.(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-xs font-semibold transition-all shadow-sm shadow-blue-500/20 cursor-pointer shrink-0"
+              title="接入新的代码仓库到门禁监控矩阵"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span>接入新项目</span>
+            </button>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {projects.map((proj) => {
+          {safeProjects.map((proj) => {
             const isSelected = selectedProjectId === proj.id;
             return (
               <div
                 key={proj.id}
-                onClick={() => setSelectedProjectId(isSelected ? "all" : proj.id)}
+                draggable
+                onDragStart={(e) => handleDragStart(e, proj.id)}
+                onDragOver={handleDragOver}
+                onDragEnter={() => handleDragEnter(proj.id)}
+                onDrop={(e) => handleDrop(e, proj.id)}
+                onDragEnd={handleDragEnd}
+                onClick={() => {
+                  const newTarget = isSelected ? "all" : proj.id;
+                  setSelectedProjectId?.(newTarget);
+                  if (newTarget === "all") {
+                    router?.push?.("/dashboard");
+                  } else {
+                    router?.push?.(`/dashboard?project=${encodeURIComponent(newTarget)}`);
+                  }
+                }}
                 className={cn(
-                  "p-4 rounded-xl border transition-all cursor-pointer relative shadow-sm hover:shadow-md",
+                  "p-4 rounded-xl border transition-all cursor-pointer relative shadow-sm hover:shadow-md select-none",
+                  draggedProjectId === proj.id && "opacity-35 scale-[0.98] border-dashed border-blue-400 dark:border-blue-500 ring-2 ring-inset ring-blue-400/30",
+                  dragOverProjectId === proj.id && "ring-2 ring-inset ring-blue-500 border-blue-500 shadow-md shadow-blue-500/20 bg-blue-50/20 dark:bg-slate-800/80",
                   isSelected
-                    ? "bg-blue-50/40 dark:bg-slate-900/90 border-blue-500/60 dark:border-cyan-500/60 shadow-lg shadow-blue-500/10 dark:shadow-cyan-500/10 ring-2 ring-blue-500/30 dark:ring-cyan-500/30"
+                    ? "bg-blue-50/40 dark:bg-slate-900/90 border-blue-500/80 dark:border-cyan-500/80 shadow-lg shadow-blue-500/10 dark:shadow-cyan-500/10 ring-2 ring-inset ring-blue-500/40 dark:ring-cyan-500/40"
                     : "bg-white dark:bg-slate-900/40 border-slate-200/80 dark:border-slate-800 hover:border-blue-400/50 dark:hover:border-slate-700"
                 )}
               >
-                <div className="flex items-start justify-between">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-sm text-slate-900 dark:text-slate-100 font-mono truncate">
-                        {proj.id}
-                      </span>
-                      {isSelected && (
-                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-blue-500/15 dark:bg-cyan-500/20 text-blue-700 dark:text-cyan-300 font-medium">
-                          当前筛选
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex items-start gap-2 flex-1">
+                    {/* Drag Handle */}
+                    <div
+                      className="mt-0.5 text-slate-300 dark:text-slate-600 hover:text-slate-600 dark:hover:text-slate-300 cursor-grab active:cursor-grabbing p-0.5 rounded transition-colors shrink-0"
+                      title="按住拖拽调整卡片排序"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <GripVertical className="h-4 w-4" />
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-sm text-slate-900 dark:text-slate-100 font-mono truncate">
+                          {proj.id}
                         </span>
-                      )}
+                        {isSelected && (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-blue-500/15 dark:bg-cyan-500/20 text-blue-700 dark:text-cyan-300 font-medium">
+                            当前筛选
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-slate-700 dark:text-slate-300 mt-0.5 font-medium truncate">
+                        {proj.name}
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-1 line-clamp-1">
+                        {proj.description || "代码仓库已接入门禁探针"}
+                      </p>
                     </div>
-                    <div className="text-xs text-slate-700 dark:text-slate-300 mt-0.5 font-medium truncate">
-                      {proj.name}
-                    </div>
-                    <p className="text-[11px] text-slate-500 mt-1 line-clamp-1">
-                      {proj.description || "代码仓库已接入门禁探针"}
-                    </p>
                   </div>
 
-                  <div className="text-right shrink-0 ml-2">
-                    <div className="text-sm font-bold text-slate-900 dark:text-slate-100 font-mono">
-                      {proj.pass_rate}%
+                  <div className="flex items-start gap-2 shrink-0 ml-2">
+                    <div className="text-right">
+                      <div className="text-sm font-bold text-slate-900 dark:text-slate-100 font-mono">
+                        {proj.pass_rate}%
+                      </div>
+                      <div className="text-[10px] text-slate-500">通过率</div>
                     </div>
-                    <div className="text-[10px] text-slate-500">通过率</div>
+
+                    {/* Delete Project Button */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setProjectPendingDelete(proj);
+                      }}
+                      className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+                      title="从门禁治理矩阵中移除此仓库"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
                   </div>
                 </div>
+
 
                 {/* Gatekeeper Mode & Control Switch */}
                 <div
@@ -466,10 +584,11 @@ export function QualityDashboardView() {
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      setSelectedProjectId(proj.id);
-                      setActiveViewMode("pipeline");
+                      setSelectedProjectId?.(proj.id);
+                      setActiveViewMode?.("pipeline");
+                      router?.push?.(`/pipeline?project=${encodeURIComponent(proj.id)}`);
                     }}
-                    className="flex items-center gap-1 text-xs text-blue-600 dark:text-cyan-400 hover:text-blue-700 dark:hover:text-cyan-300 font-medium transition-colors"
+                    className="flex items-center gap-1 text-xs text-blue-600 dark:text-cyan-400 hover:text-blue-700 dark:hover:text-cyan-300 font-medium transition-colors cursor-pointer"
                     title="为该仓库编排门禁规则流水线"
                   >
                     <Sliders className="h-3 w-3" />
@@ -617,14 +736,19 @@ export function QualityDashboardView() {
                           "hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-all cursor-pointer relative",
                           !ev?.passed && "bg-rose-50/20 dark:bg-rose-950/10",
                           !isRead && "bg-blue-50/20 dark:bg-blue-950/10 font-medium",
-                          isHighlighted && "ring-2 ring-blue-500 shadow-xl bg-blue-100/80 dark:bg-blue-950/70 dark:ring-cyan-400"
+                          isHighlighted && "bg-blue-100/90 dark:bg-blue-950/80 shadow-xs"
                         )}
                         onClick={() => {
                           setSelectedEventId(isExpanded ? null : ev?.id);
                           if (!isRead && ev?.id) markEventAsRead(ev?.id);
                         }}
                       >
-                        <td className="py-2.5 px-3 whitespace-nowrap">
+                        <td
+                          className={cn(
+                            "py-2.5 px-3 whitespace-nowrap transition-all",
+                            isHighlighted && "border-l-4 border-l-blue-600 dark:border-l-cyan-400 pl-2"
+                          )}
+                        >
                           <div className="flex items-center gap-1.5 flex-wrap">
                             {ev?.passed ? (
                               <Chip
@@ -844,6 +968,64 @@ export function QualityDashboardView() {
         projectId={selectedProjectId}
         onRuleApplied={handleRefresh}
       />
+
+      {/* Delete Project Confirmation Dialog */}
+      {projectPendingDelete && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-in fade-in duration-200"
+          onClick={() => !isDeletingProject && setProjectPendingDelete(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl p-6 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3">
+              <div className="h-10 w-10 rounded-xl bg-rose-500/10 dark:bg-rose-500/20 border border-rose-500/20 flex items-center justify-center text-rose-600 dark:text-rose-400 shrink-0">
+                <Trash2 className="h-5 w-5" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                  确认移除项目「{projectPendingDelete.name || projectPendingDelete.id}」？
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1.5 leading-relaxed">
+                  项目标识: <code className="font-mono font-semibold text-slate-700 dark:text-slate-300">{projectPendingDelete.id}</code>
+                  <br />
+                  移除后，该项目将退出门禁质量治理矩阵，历史审计流水将被清理。
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                disabled={isDeletingProject}
+                onClick={() => setProjectPendingDelete(null)}
+                className="px-3.5 py-1.5 rounded-xl text-xs font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingProject}
+                onClick={async () => {
+                  if (!projectPendingDelete) return;
+                  setIsDeletingProject(true);
+                  try {
+                    await deleteProject(projectPendingDelete.id);
+                    setProjectPendingDelete(null);
+                  } finally {
+                    setIsDeletingProject(false);
+                  }
+                }}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white text-xs font-semibold transition-all shadow-sm shadow-rose-500/20 cursor-pointer disabled:opacity-50"
+              >
+                {isDeletingProject ? "正在移除..." : "确认移除项目"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+

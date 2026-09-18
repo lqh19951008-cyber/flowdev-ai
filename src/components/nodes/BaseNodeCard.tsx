@@ -107,13 +107,13 @@ export const BaseNodeCard = memo(
           "bg-white/95 dark:bg-slate-900/95 text-slate-800 dark:text-slate-100",
           // Running state: glowing pulsing blue border & shadow
           isRunning &&
-            "border-blue-500 ring-2 ring-blue-500/60 shadow-xl shadow-blue-500/25 animate-pulse",
+            "border-blue-500 ring-2 ring-inset ring-blue-500/60 shadow-xl shadow-blue-500/25 animate-pulse",
           // Completed state: neat emerald border
           isCompleted &&
             "border-emerald-500/70 shadow-lg shadow-emerald-500/10",
           // Selected state
           selected && !isRunning &&
-            "border-blue-500 ring-2 ring-blue-500/40 shadow-blue-500/15",
+            "border-blue-500 ring-2 ring-inset ring-blue-500/40 shadow-blue-500/15",
           // Default idle state
           !selected && !isRunning && !isCompleted &&
             "border-slate-200/90 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 hover:shadow-lg"

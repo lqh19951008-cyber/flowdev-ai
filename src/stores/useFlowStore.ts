@@ -23,8 +23,48 @@ import { executeWorkflowStream } from "@/lib/sse";
 import { getPreset } from "@/lib/presets";
 
 const READ_EVENTS_STORAGE_KEY = "flowdev_read_events_v1";
+const PROJECTS_ORDER_STORAGE_KEY = "flowdev_projects_order_v1";
 const getProjectStorageKey = (projectId: string) =>
   `flowdev_workflow_project_${projectId || "rxjs"}`;
+
+const getSavedProjectOrder = (): string[] => {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(PROJECTS_ORDER_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+};
+
+const saveProjectOrder = (orderIds: string[]) => {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(PROJECTS_ORDER_STORAGE_KEY, JSON.stringify(orderIds));
+  } catch (e) {
+    console.warn("Failed to persist project order to localStorage", e);
+  }
+};
+
+const applyProjectOrdering = (projects: ProjectItem[]): ProjectItem[] => {
+  const savedOrder = getSavedProjectOrder();
+  if (!savedOrder || savedOrder.length === 0) return projects;
+  const projectMap = new Map(projects.map((p) => [p.id, p]));
+  const ordered: ProjectItem[] = [];
+
+  for (const id of savedOrder) {
+    const p = projectMap.get(id);
+    if (p) {
+      ordered.push(p);
+      projectMap.delete(id);
+    }
+  }
+  Array.from(projectMap.values()).forEach((remaining) => {
+    ordered.push(remaining);
+  });
+  return ordered;
+};
+
 
 const getSavedReadEventIds = (): string[] => {
   if (typeof window === "undefined") return [];
@@ -83,6 +123,7 @@ interface FlowState {
   isTopologyModalOpen: boolean;
   isSettingsModalOpen: boolean;
   settingsModalTab: "llm" | "feishu";
+  isAddProjectModalOpen: boolean;
 
 
   // Execution State
@@ -117,6 +158,7 @@ interface FlowState {
   setTopologyModalOpen: (open: boolean) => void;
   setDiffModalOpen: (open: boolean) => void;
   setSettingsModalOpen: (open: boolean, tab?: "llm" | "feishu") => void;
+  setAddProjectModalOpen: (open: boolean) => void;
   setArtifacts: (data: Partial<ExecutionArtifacts>) => void;
 
   loadPreset: (presetId: PresetId) => void;
@@ -129,6 +171,9 @@ interface FlowState {
   setSelectedProjectId: (id: string) => void;
   setProjects: (projects: ProjectItem[]) => void;
   fetchProjects: () => Promise<void>;
+  createProject: (payload: { id: string; name?: string; description?: string; failure_action?: "block_commit" | "warn_only" | "disabled"; presetId?: PresetId }) => Promise<boolean>;
+  deleteProject: (projectId: string) => Promise<boolean>;
+  reorderProjects: (newProjects: ProjectItem[]) => void;
   updateProjectGateMode: (projectId: string, mode: "block_commit" | "warn_only" | "disabled") => Promise<void>;
   fetchRecentEvents: (projectId?: string) => Promise<void>;
   addLiveEvent: (event: ScanEventItem) => void;
@@ -354,6 +399,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   isTopologyModalOpen: false,
   isSettingsModalOpen: false,
   settingsModalTab: "llm",
+  isAddProjectModalOpen: false,
 
 
   isExecuting: false,
@@ -482,6 +528,10 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       isSettingsModalOpen: open,
       settingsModalTab: tab !== undefined ? tab : state.settingsModalTab,
     }));
+  },
+
+  setAddProjectModalOpen: (open) => {
+    set({ isAddProjectModalOpen: open });
   },
 
   setArtifacts: (data) => {
@@ -662,19 +712,131 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     }
   },
 
-  setProjects: (projects: ProjectItem[]) => set({ projects }),
+  setProjects: (projects: ProjectItem[]) => {
+    const ordered = applyProjectOrdering(projects);
+    set({ projects: ordered });
+  },
 
   fetchProjects: async () => {
     try {
       const res = await fetch("http://127.0.0.1:8000/api/projects");
       if (res.ok) {
         const data = await res.json();
-        set({ projects: data });
+        const ordered = applyProjectOrdering(data);
+        set({ projects: ordered });
       }
     } catch (e) {
       console.warn("Failed to fetch projects", e);
     }
   },
+
+  createProject: async (payload) => {
+    const cleanId = payload?.id?.trim() ?? "";
+    if (!cleanId) return false;
+
+    const currentList = get().projects ?? [];
+    const existing = currentList.find((p) => p?.id?.toLowerCase() === cleanId.toLowerCase());
+    if (existing) {
+      return false;
+    }
+
+    const action = payload?.failure_action ?? "block_commit";
+    const chosenPresetId: PresetId = payload?.presetId ?? "full_review_heal";
+    const preset = getPreset(chosenPresetId);
+
+    // Save initial DAG to localStorage draft for this new project immediately
+    if (typeof window !== "undefined" && preset) {
+      try {
+        localStorage.setItem(
+          getProjectStorageKey(cleanId),
+          JSON.stringify({
+            nodes: preset.nodes ?? [],
+            edges: preset.edges ?? [],
+            timestamp: Date.now(),
+          })
+        );
+      } catch (e) {
+        console.warn("Failed to persist initial project workflow to localStorage", e);
+      }
+    }
+
+    const newProject: ProjectItem = {
+      id: cleanId,
+      name: payload?.name?.trim() || cleanId,
+      description: payload?.description?.trim() || `接入的代码仓库: ${cleanId}`,
+      policy: {
+        gate_enabled: action !== "disabled",
+        failure_action: action,
+        preset: chosenPresetId,
+        nodes: preset?.nodes ?? [],
+        edges: preset?.edges ?? [],
+      },
+      failure_action: action,
+      gate_enabled: action !== "disabled",
+      total_scans: 0,
+      passed_scans: 0,
+      pass_rate: 100,
+      last_scan_at: null,
+    };
+
+    const nextProjects = [newProject, ...currentList];
+    set({ projects: nextProjects });
+    saveProjectOrder(nextProjects.map((p) => p.id));
+
+    try {
+      await fetch("http://127.0.0.1:8000/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: cleanId,
+          name: newProject.name,
+          description: newProject.description,
+          failure_action: action,
+          preset_id: chosenPresetId,
+          policy_dag: {
+            preset: chosenPresetId,
+            nodes: preset?.nodes ?? [],
+            edges: preset?.edges ?? [],
+          },
+        }),
+      });
+    } catch (e) {
+      console.warn("Failed to create project on server, preserved locally", e);
+    }
+    return true;
+  },
+
+  deleteProject: async (projectId: string) => {
+    const cleanId = projectId.trim();
+    if (!cleanId) return false;
+
+    const prevProjects = get().projects;
+    const nextProjects = prevProjects.filter((p) => p.id !== cleanId);
+
+    const currentSelected = get().selectedProjectId;
+    const nextSelected = currentSelected === cleanId ? "all" : currentSelected;
+
+    set({
+      projects: nextProjects,
+      selectedProjectId: nextSelected,
+    });
+    saveProjectOrder(nextProjects.map((p) => p.id));
+
+    try {
+      await fetch(`http://127.0.0.1:8000/api/projects/${encodeURIComponent(cleanId)}`, {
+        method: "DELETE",
+      });
+    } catch (e) {
+      console.warn("Failed to delete project on server, removed locally", e);
+    }
+    return true;
+  },
+
+  reorderProjects: (newProjects: ProjectItem[]) => {
+    set({ projects: newProjects });
+    saveProjectOrder(newProjects.map((p) => p.id));
+  },
+
 
   updateProjectGateMode: async (projectId: string, mode: "block_commit" | "warn_only" | "disabled") => {
     try {
@@ -789,8 +951,8 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   locateEvent: (eventId: string) => {
     if (!eventId) return;
     const events = get().recentEvents;
-    const event = events.find((e) => e.id === eventId);
-    get().markEventAsRead(eventId);
+    const event = events.find((e) => e?.id === eventId);
+    get().markEventAsRead?.(eventId);
 
     set({
       isLiveFeedOpen: false,
@@ -799,14 +961,14 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     });
 
     if (event?.project_id && get().selectedProjectId !== "all" && get().selectedProjectId !== event.project_id) {
-      get().setSelectedProjectId(event.project_id);
+      get().setSelectedProjectId?.(event.project_id);
     }
 
     if (typeof window !== "undefined") {
       try {
-        const currentPath = window.location.pathname;
+        const currentPath = window?.location?.pathname ?? "";
         if (currentPath !== "/dashboard" && currentPath !== "/") {
-          window.history.pushState({}, "", `/dashboard?eventId=${encodeURIComponent(eventId)}`);
+          window.location.href = `/dashboard?eventId=${encodeURIComponent(eventId)}`;
         } else {
           const url = new URL(window.location.href);
           url.searchParams.set("eventId", eventId);

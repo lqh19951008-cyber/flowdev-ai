@@ -1,6 +1,7 @@
 "use client";
 
-import React from "react";
+import React, { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import {
   X,
   Workflow,
@@ -18,15 +19,28 @@ interface PipelineGuideModalProps {
 }
 
 export function PipelineGuideModal({ isOpen, onClose }: PipelineGuideModalProps) {
-  const { loadPreset, selectedProjectId } = useFlowStore();
+  const loadPreset = useFlowStore((s) => s?.loadPreset);
+  const selectedProjectId = useFlowStore((s) => s?.selectedProjectId);
+  const [mounted, setMounted] = useState(false);
 
-  if (!isOpen) return null;
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-150">
-      <div className="relative w-full max-w-2xl rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-6 shadow-2xl space-y-5 text-slate-800 dark:text-slate-200 select-none max-h-[90vh] overflow-y-auto">
+  if (!isOpen || !mounted) return null;
+  if (typeof document === "undefined" || !document?.body) return null;
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+      onClick={onClose}
+    >
+      <div
+        className="relative w-full max-w-2xl max-h-[90vh] flex flex-col rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 shadow-2xl text-slate-800 dark:text-slate-200 select-none overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+        <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 px-6 py-4 shrink-0 bg-slate-50/70 dark:bg-slate-900/50">
           <div className="flex items-center gap-2.5">
             <div className="h-8 w-8 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-blue-500/20">
               <Workflow className="h-4 w-4" />
@@ -51,7 +65,9 @@ export function PipelineGuideModal({ isOpen, onClose }: PipelineGuideModalProps)
           </button>
         </div>
 
-        {/* 1. DAG Physical Pipeline Model */}
+        {/* Scrollable Body Content */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-5">
+          {/* 1. DAG Physical Pipeline Model */}
         <div className="space-y-2.5">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
             <span className="h-1.5 w-1.5 rounded-full bg-cyan-500 dark:bg-cyan-400" />
@@ -160,14 +176,16 @@ export function PipelineGuideModal({ isOpen, onClose }: PipelineGuideModalProps)
           </div>
         </div>
 
+        </div>
+
         {/* Footer Actions */}
-        <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-slate-800">
+        <div className="px-6 py-3.5 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between shrink-0 bg-slate-50/70 dark:bg-slate-900/50">
           <button
             onClick={() => {
               loadPreset("full_review_heal");
               onClose();
             }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-900 text-xs font-medium text-slate-700 dark:text-slate-300 transition-colors shadow-xs"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-900 text-xs font-medium text-slate-700 dark:text-slate-300 transition-colors shadow-xs cursor-pointer"
           >
             <LayoutTemplate className="h-3.5 w-3.5 text-blue-500" />
             <span>载入标准企业全流程模版</span>
@@ -175,13 +193,14 @@ export function PipelineGuideModal({ isOpen, onClose }: PipelineGuideModalProps)
 
           <button
             onClick={onClose}
-            className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-xs font-semibold text-white transition-all shadow-md shadow-blue-500/20"
+            className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-xs font-semibold text-white transition-all shadow-md shadow-blue-500/20 cursor-pointer"
           >
             <CheckCircle2 className="h-3.5 w-3.5" />
             <span>开始编排</span>
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

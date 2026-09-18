@@ -1,7 +1,7 @@
 import { Node, Edge } from "@xyflow/react";
 export type { Edge, Node };
 
-export type ActiveViewMode = "dashboard" | "pipeline";
+export type ActiveViewMode = "dashboard" | "pipeline" | "skills";
 
 export type FlowNodeType =
   | "code_input"

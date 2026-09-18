@@ -253,14 +253,73 @@ class DatabaseService:
                 (clean_id, display_name, f"自动识别的代码仓库: {clean_id}", "{}", now, now),
             )
             conn.commit()
+    @classmethod
+    def create_project(
+        cls,
+        project_id: str,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        failure_action: Optional[str] = "block_commit",
+        preset_id: Optional[str] = None,
+        policy_dag: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Creates a new project in the database with configured gate mode and initial DAG policy."""
+        clean_id = project_id.strip()
+        if not clean_id:
+            raise ValueError("项目标识 (project_id) 不能为空")
+
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM projects WHERE id = ?", (clean_id,))
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+
+            now = get_utc_now_iso()
+            display_name = (name or "").strip() or clean_id
+            desc = (description or "").strip() or f"接入的代码仓库: {clean_id}"
+            action = failure_action if failure_action in ("block_commit", "warn_only", "disabled") else "block_commit"
+            initial_policy: Dict[str, Any] = {
+                "gate_enabled": action != "disabled",
+                "failure_action": action,
+            }
+            if preset_id:
+                initial_policy["preset"] = preset_id
+            if policy_dag and isinstance(policy_dag, dict):
+                initial_policy.update(policy_dag)
+                initial_policy["gate_enabled"] = action != "disabled"
+                initial_policy["failure_action"] = action
+
+            cursor.execute(
+                """
+                INSERT INTO projects (id, name, description, policy_dag_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (clean_id, display_name, desc, json.dumps(initial_policy, ensure_ascii=False), now, now),
+            )
+            conn.commit()
             return {
                 "id": clean_id,
                 "name": display_name,
-                "description": f"自动识别的代码仓库: {clean_id}",
-                "policy_dag_json": "{}",
+                "description": desc,
+                "policy_dag_json": json.dumps(initial_policy, ensure_ascii=False),
                 "created_at": now,
                 "updated_at": now,
             }
+
+    @classmethod
+    def delete_project(cls, project_id: str) -> bool:
+        """Deletes a project and its associated scan events from the database."""
+        clean_id = project_id.strip()
+        if not clean_id:
+            return False
+
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM scan_events WHERE project_id = ?", (clean_id,))
+            cursor.execute("DELETE FROM projects WHERE id = ?", (clean_id,))
+            conn.commit()
+            return cursor.rowcount > 0
 
     @classmethod
     def list_projects_with_stats(cls) -> List[Dict[str, Any]]:

@@ -1,18 +1,15 @@
-"use client";
-
-import React, { useState } from "react";
+import React from "react";
 import {
   FileCode2,
   Sparkles,
   TestTube2,
   GitCompare,
-  GripVertical,
   Layers,
   ChevronLeft,
   ChevronRight,
   Move,
+  GripVertical,
   Info,
-  FolderGit2,
 } from "lucide-react";
 import { Chip } from "@heroui/react";
 import { useFlowStore } from "@/stores/useFlowStore";
@@ -95,7 +92,7 @@ const ITEM_THEMES: Record<
 };
 
 export function Sidebar() {
-  const { isSidebarOpen, toggleSidebar, projects, selectedProjectId, setSelectedProjectId } = useFlowStore();
+  const { isSidebarOpen, toggleSidebar } = useFlowStore() ?? {};
 
   const onDragStart = (event: React.DragEvent, nodeType: FlowNodeType) => {
     event.dataTransfer.setData("application/reactflow", nodeType);
@@ -103,10 +100,6 @@ export function Sidebar() {
     event.dataTransfer.setData("text", nodeType);
     event.dataTransfer.effectAllowed = "move";
   };
-
-  const currentProj =
-    (projects ?? []).find((p) => p.id === (selectedProjectId === "all" ? (projects?.[0]?.id ?? "rxjs") : selectedProjectId)) ??
-    projects?.[0];
 
   return (
     <aside
@@ -118,52 +111,48 @@ export function Sidebar() {
       {/* Header & Fold Toggle */}
       <div
         className={cn(
-          "h-14 border-b border-slate-200/90 dark:border-slate-800/90 bg-slate-50/70 dark:bg-slate-900/60 flex items-center shrink-0 px-3",
-          isSidebarOpen ? "justify-between" : "justify-center"
+          "flex items-center justify-between border-b border-slate-200/80 dark:border-slate-800/80 p-3 h-14 shrink-0 transition-all",
+          !isSidebarOpen && "justify-center p-2"
         )}
       >
         {isSidebarOpen ? (
-          <>
-            <div className="flex items-center gap-2 min-w-0">
-              <div className="h-7 w-7 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
-                <Layers className="h-4 w-4" />
-              </div>
-              <span className="text-xs font-bold text-slate-800 dark:text-slate-100 truncate">
-                算子物料库
-              </span>
-              <Chip
-                size="sm"
-                variant="flat"
-                color="primary"
-                className="h-4 px-1.5 text-[9px] font-mono"
-              >
-                4
-              </Chip>
+          <div className="flex items-center gap-2">
+            <div className="p-1.5 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400">
+              <Layers className="h-4 w-4" />
             </div>
-            <button
-              onClick={() => toggleSidebar(false)}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-              title="折叠算子栏"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </button>
-          </>
-        ) : (
-          <button
-            onClick={() => toggleSidebar(true)}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-100 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-            title="展开算子物料库"
-          >
-            <ChevronRight className="h-4 w-4 text-blue-500 dark:text-blue-400" />
-          </button>
-        )}
+            <div>
+              <h2 className="text-xs font-bold text-slate-900 dark:text-slate-100 tracking-tight">
+                门禁算子库
+              </h2>
+              <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                拖拽节点编排流水线
+              </p>
+            </div>
+          </div>
+        ) : null}
+
+        <button
+          onClick={() => toggleSidebar?.()}
+          className={cn(
+            "p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors",
+            !isSidebarOpen && "text-slate-600 dark:text-slate-400"
+          )}
+          title={isSidebarOpen ? "收起算子库" : "展开算子库"}
+        >
+          {isSidebarOpen ? (
+            <ChevronLeft className="h-4 w-4" />
+          ) : (
+            <ChevronRight className="h-4 w-4" />
+          )}
+        </button>
       </div>
 
-      {/* Collapsed State: Mini Icon Rail */}
+      {/* Palette Items */}
       {!isSidebarOpen ? (
-        <div className="flex-1 py-3 flex flex-col items-center gap-2.5 overflow-y-auto overflow-x-hidden">
+        /* Collapsed State: Icon Grid (Drag Only) */
+        <div className="flex-1 overflow-y-auto p-1.5 space-y-2 flex flex-col items-center">
           {PALETTE_ITEMS.map((item) => {
-            const theme = ITEM_THEMES[item.type];
+            const theme = ITEM_THEMES[item.type] ?? ITEM_THEMES.code_input;
             const Icon = theme.icon;
 
             return (
@@ -171,12 +160,21 @@ export function Sidebar() {
                 key={item.type}
                 draggable
                 onDragStart={(e) => onDragStart(e, item.type)}
-                title={`${item.label} (按住拖拽至画布)`}
                 className={cn(
-                  "group relative h-9 w-9 flex items-center justify-center rounded-xl border border-slate-200/90 dark:border-slate-800/80 bg-slate-50/80 dark:bg-slate-900/60 hover:bg-white dark:hover:bg-slate-800 hover:border-blue-400/80 cursor-grab active:cursor-grabbing transition-all duration-150 shadow-xs"
+                  "group relative p-2.5 rounded-xl border transition-all cursor-grab active:cursor-grabbing select-none shadow-xs hover:shadow-md",
+                  "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800",
+                  theme.borderHover
                 )}
               >
-                <Icon className={cn("h-4 w-4 transition-transform group-hover:scale-110", theme.iconColor)} />
+                <div
+                  className={cn(
+                    "flex items-center justify-center rounded-lg p-1 transition-colors",
+                    theme.iconBg,
+                    theme.iconColor
+                  )}
+                >
+                  <Icon className="h-4 w-4" />
+                </div>
 
                 {/* Floating Tooltip */}
                 <div className="pointer-events-none absolute left-full ml-2.5 z-50 whitespace-nowrap rounded-xl bg-slate-900/95 border border-slate-800 px-2.5 py-1.5 text-[11px] font-semibold text-slate-100 shadow-xl opacity-0 group-hover:opacity-100 transition-opacity">
@@ -190,30 +188,6 @@ export function Sidebar() {
       ) : (
         /* Expanded State: Refined HeroUI Cards List (Drag Only) */
         <div className="flex-1 overflow-y-auto p-2.5 space-y-2.5">
-          {/* Target Project Selector Card */}
-          <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-800 shadow-xs">
-            <div className="flex items-center justify-between text-[11px] mb-1.5">
-              <span className="text-slate-500 dark:text-slate-400 font-medium flex items-center gap-1">
-                <FolderGit2 className="h-3.5 w-3.5 text-blue-600 dark:text-cyan-400" />
-                编排目标仓库
-              </span>
-              <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-medium">
-                {currentProj?.pass_rate ?? 100}% 放行
-              </span>
-            </div>
-            <select
-              value={selectedProjectId === "all" ? (projects?.[0]?.id ?? "rxjs") : selectedProjectId}
-              onChange={(e) => setSelectedProjectId?.(e.target.value)}
-              className="w-full h-7 text-xs font-mono font-semibold bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg px-2 text-slate-800 dark:text-slate-200 focus:outline-none focus:border-blue-500 cursor-pointer shadow-2xs"
-            >
-              {(projects ?? []).map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.id} ({p.name || p.id})
-                </option>
-              ))}
-            </select>
-          </div>
-
           <div className="text-[10px] text-slate-400 dark:text-slate-500 px-1 font-mono flex items-center justify-between">
             <span className="flex items-center gap-1">
               <Move className="h-3 w-3" />
@@ -223,7 +197,7 @@ export function Sidebar() {
           </div>
 
           {PALETTE_ITEMS.map((item) => {
-            const theme = ITEM_THEMES[item.type];
+            const theme = ITEM_THEMES[item.type] ?? ITEM_THEMES.code_input;
             const Icon = theme.icon;
 
             return (
