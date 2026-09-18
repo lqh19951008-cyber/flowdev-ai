@@ -101,6 +101,7 @@ interface FlowState {
   recentEvents: ScanEventItem[];
   readEventIds: string[];
   unreadEventsCount: number;
+  highlightedEventId: string | null;
   isProjectStatsModalOpen: boolean;
   isLiveFeedOpen: boolean;
 
@@ -136,6 +137,8 @@ interface FlowState {
   toggleEventRead: (id: string) => void;
   isEventRead: (id: string) => boolean;
   clearUnreadEventsCount: () => void;
+  setHighlightedEventId: (id: string | null) => void;
+  locateEvent: (eventId: string) => void;
   setProjectStatsModalOpen: (open: boolean) => void;
   setLiveFeedOpen: (open: boolean) => void;
   saveCurrentPolicyToProject: (projectId: string) => Promise<boolean>;
@@ -377,6 +380,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   recentEvents: [],
   readEventIds: [],
   unreadEventsCount: 0,
+  highlightedEventId: null,
   isProjectStatsModalOpen: false,
   isLiveFeedOpen: false,
 
@@ -778,6 +782,40 @@ export const useFlowStore = create<FlowState>((set, get) => ({
 
   clearUnreadEventsCount: () => {
     get().markAllEventsAsRead();
+  },
+
+  setHighlightedEventId: (id: string | null) => set({ highlightedEventId: id }),
+
+  locateEvent: (eventId: string) => {
+    if (!eventId) return;
+    const events = get().recentEvents;
+    const event = events.find((e) => e.id === eventId);
+    get().markEventAsRead(eventId);
+
+    set({
+      isLiveFeedOpen: false,
+      highlightedEventId: eventId,
+      activeViewMode: "dashboard",
+    });
+
+    if (event?.project_id && get().selectedProjectId !== "all" && get().selectedProjectId !== event.project_id) {
+      get().setSelectedProjectId(event.project_id);
+    }
+
+    if (typeof window !== "undefined") {
+      try {
+        const currentPath = window.location.pathname;
+        if (currentPath !== "/dashboard" && currentPath !== "/") {
+          window.history.pushState({}, "", `/dashboard?eventId=${encodeURIComponent(eventId)}`);
+        } else {
+          const url = new URL(window.location.href);
+          url.searchParams.set("eventId", eventId);
+          window.history.replaceState({}, "", url.toString());
+        }
+      } catch {
+        // Safe navigation fallback
+      }
+    }
   },
 
   setProjectStatsModalOpen: (open: boolean) =>

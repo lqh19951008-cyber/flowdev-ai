@@ -12,6 +12,7 @@ import {
   Radio,
   FileCode,
   CheckCheck,
+  Target,
 } from "lucide-react";
 import { useFlowStore } from "@/stores/useFlowStore";
 import { ScanEventItem } from "@/types/flow";
@@ -30,6 +31,7 @@ export function LiveGuardFeed() {
     setLiveFeedOpen,
     setSelectedProjectId,
     setActiveViewMode,
+    locateEvent,
   } = useFlowStore();
 
   const [activeToast, setActiveToast] = useState<ScanEventItem | null>(null);
@@ -160,13 +162,15 @@ export function LiveGuardFeed() {
               <button
                 onClick={() => {
                   setToastVisible(false);
-                  markEventAsRead(activeToast.id);
-                  setSelectedProjectId(activeToast.project_id);
-                  setActiveViewMode("dashboard");
+                  if (activeToast?.id) {
+                    locateEvent(activeToast.id);
+                  }
                 }}
-                className="ml-auto text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 flex items-center gap-1 font-sans font-medium"
+                className="ml-auto text-blue-600 dark:text-cyan-400 hover:text-blue-700 dark:hover:text-cyan-300 flex items-center gap-1 font-sans font-medium"
+                title="定位到该条提交审计消息"
               >
-                查看详情
+                <Target className="h-3.5 w-3.5 animate-pulse" />
+                <span>定位消息</span>
                 <ExternalLink className="h-3 w-3" />
               </button>
             </div>
@@ -260,18 +264,16 @@ export function LiveGuardFeed() {
                     <div
                       key={event.id}
                       onClick={() => {
-                        markEventAsRead(event.id);
-                        setSelectedProjectId(event.project_id);
-                        setLiveFeedOpen(false);
-                        setActiveViewMode("dashboard");
+                        locateEvent(event.id);
                       }}
                       className={cn(
-                        "p-2.5 rounded-xl border text-xs cursor-pointer transition-all hover:scale-[1.01] shadow-xs relative",
+                        "p-2.5 rounded-xl border text-xs cursor-pointer transition-all hover:scale-[1.01] shadow-xs relative group",
                         event.passed
-                          ? "bg-slate-50/80 dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 hover:border-emerald-500/30"
-                          : "bg-rose-50/60 dark:bg-rose-950/20 border-rose-200 dark:border-rose-900/40 hover:border-rose-500/50",
+                          ? "bg-slate-50/80 dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 hover:border-emerald-500/40 hover:shadow-md"
+                          : "bg-rose-50/60 dark:bg-rose-950/20 border-rose-200 dark:border-rose-900/40 hover:border-rose-500/60 hover:shadow-md",
                         !isRead && "ring-1 ring-blue-500/40 bg-blue-50/30 dark:bg-blue-950/20"
                       )}
+                      title="点击定位到该条审计详情与消息"
                     >
                       <div className="flex items-center justify-between gap-1 mb-1">
                         <div className="flex items-center gap-1.5">
@@ -308,10 +310,16 @@ export function LiveGuardFeed() {
 
                       <div className="flex items-center justify-between text-[10px] text-slate-500 dark:text-slate-400 font-mono">
                         <span>{event.committer}</span>
-                        <span className="flex items-center gap-1">
-                          <FileCode className="h-3 w-3 text-slate-400 dark:text-slate-500" />
-                          {event.files_count} 文件
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="flex items-center gap-1">
+                            <FileCode className="h-3 w-3 text-slate-400 dark:text-slate-500" />
+                            {event.files_count} 文件
+                          </span>
+                          <span className="text-blue-600 dark:text-cyan-400 font-sans font-medium text-[10px] opacity-70 group-hover:opacity-100 transition-opacity flex items-center gap-0.5">
+                            <Target className="h-3 w-3" />
+                            定位
+                          </span>
+                        </div>
                       </div>
                     </div>
                   );

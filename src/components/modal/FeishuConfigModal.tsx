@@ -48,6 +48,7 @@ interface SystemSettingsModalProps {
   isOpen?: boolean;
   onClose?: () => void;
   defaultTab?: "llm" | "feishu";
+  isEmbedded?: boolean;
 }
 
 // Preset connection templates for quick-adding / editing
@@ -119,6 +120,7 @@ export function SystemSettingsModal({
   isOpen,
   onClose,
   defaultTab,
+  isEmbedded,
 }: SystemSettingsModalProps) {
   const storeIsOpen = useFlowStore((s) => s.isSettingsModalOpen);
   const storeTab = useFlowStore((s) => s.settingsModalTab);
@@ -139,7 +141,11 @@ export function SystemSettingsModal({
 
   const copyToClipboard = (text: string, identifier?: string) => {
     if (!text) return;
-    navigator.clipboard.writeText(text);
+    try {
+      if (typeof navigator !== "undefined" && navigator?.clipboard?.writeText) {
+        navigator.clipboard.writeText(text).catch(() => {});
+      }
+    } catch (e) {}
     const id = identifier || text;
     setCopiedId(id);
     setTimeout(() => {
@@ -424,9 +430,9 @@ export function SystemSettingsModal({
 
         setQuickKeyModal(null);
         setLlmTestResult({
-          profileId: quickKeyModal.profileId,
+          profileId: quickKeyModal?.profileId,
           success: true,
-          message: `✅ 已成功为「${quickKeyModal.profileName}」更新 API Key (${cleaned.length} 个 Key)！`,
+          message: `✅ 已成功为「${quickKeyModal?.profileName ?? "连接"}」更新 API Key (${cleaned.length} 个 Key)！`,
         });
       }
     } catch (e) {
@@ -559,45 +565,47 @@ export function SystemSettingsModal({
     }
   };
 
-  if (!effectiveIsOpen) return null;
+  const isModalActive = isEmbedded ? true : effectiveIsOpen;
+  if (!isModalActive) return null;
 
-  return (
+  const content = (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-150 select-none overflow-y-auto"
-      onClick={handleClose}
+      className={cn(
+        "relative w-full rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl p-6 flex flex-col space-y-5",
+        isEmbedded ? "max-w-4xl mx-auto shadow-sm my-0" : "max-w-2xl my-auto max-h-[90vh] overflow-y-auto"
+      )}
+      onClick={(e) => e.stopPropagation()}
     >
-      <div
-        className="relative w-full max-w-2xl rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl p-6 flex flex-col space-y-5 my-auto max-h-[90vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Modal Header */}
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
-              <SlidersHorizontal className="h-5 w-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
-                  系统与多大模型连接管理
-                </h3>
-                <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 border border-blue-200/50 dark:border-blue-800/50">
-                  Multi-Key &amp; Connection Hub
-                </span>
-              </div>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                支持配置多套大模型连接与单连接多 API Key，点击即可复制，随时测试与维护
-              </p>
-            </div>
+      {/* Modal / View Header */}
+      <div className="flex items-start justify-between">
+        <div className="flex items-center gap-3">
+          <div className="h-10 w-10 rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
+            <SlidersHorizontal className="h-5 w-5" />
           </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                系统与多大模型连接管理
+              </h3>
+              <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 border border-blue-200/50 dark:border-blue-800/50">
+                Multi-Key &amp; Connection Hub
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              支持配置多套大模型连接与单连接多 API Key，点击即可复制，随时测试与维护
+            </p>
+          </div>
+        </div>
 
+        {!isEmbedded && (
           <button
             onClick={handleClose}
             className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
           >
             <X className="h-4 w-4" />
           </button>
-        </div>
+        )}
+      </div>
 
         {/* Tab Navigation */}
         <div className="flex items-center bg-slate-100 dark:bg-slate-950/80 p-1 rounded-xl border border-slate-200/80 dark:border-slate-800">
@@ -675,7 +683,7 @@ export function SystemSettingsModal({
                 <div className="flex items-center justify-between pb-1 border-b border-blue-200/60 dark:border-blue-900/40">
                   <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800 dark:text-slate-200">
                     <KeyRound className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                    <span>管理 API Key 凭证池 — 「{quickKeyModal.profileName}」</span>
+                    <span>管理 API Key 凭证池 — 「{quickKeyModal?.profileName ?? ""}」</span>
                   </div>
                   <button
                     type="button"
@@ -1170,12 +1178,12 @@ export function SystemSettingsModal({
                               onClick={() => {
                                 const fullConfig = JSON.stringify(
                                   {
-                                    name: p.name,
-                                    api_base: p.api_base,
-                                    default_model: p.default_model,
+                                    name: p?.name,
+                                    api_base: p?.api_base,
+                                    default_model: p?.default_model,
                                     api_keys: keys,
                                   },
-                                  null,
+                                  undefined,
                                   2
                                 );
                                 copyToClipboard(fullConfig, `config_${p.id}`);
@@ -1401,7 +1409,23 @@ export function SystemSettingsModal({
             </div>
           </div>
         )}
+    </div>
+  );
+
+  if (isEmbedded) {
+    return (
+      <div className="w-full h-full overflow-y-auto p-4 sm:p-6 lg:p-8 select-none">
+        {content}
       </div>
+    );
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-150 select-none overflow-y-auto"
+      onClick={handleClose}
+    >
+      {content}
     </div>
   );
 }

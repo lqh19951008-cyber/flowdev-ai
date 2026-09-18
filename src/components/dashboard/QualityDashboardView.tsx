@@ -25,6 +25,7 @@ import {
   Terminal,
   Zap,
   Power,
+  Target,
 } from "lucide-react";
 import { Chip } from "@heroui/react";
 import { useFlowStore } from "@/stores/useFlowStore";
@@ -46,6 +47,8 @@ export function QualityDashboardView() {
     toggleEventRead,
     isEventRead,
     unreadEventsCount,
+    highlightedEventId,
+    setHighlightedEventId,
     fetchProjects,
     updateProjectGateMode,
     fetchRecentEvents,
@@ -98,6 +101,42 @@ export function QualityDashboardView() {
     fetchProjects();
     fetchRecentEvents(selectedProjectId === "all" ? undefined : selectedProjectId);
   }, [selectedProjectId, fetchProjects, fetchRecentEvents]);
+
+  // Real-time location effect when an event is selected in live feed / activity drawer
+  useEffect(() => {
+    if (!highlightedEventId) return;
+
+    setSelectedEventId(highlightedEventId);
+
+    const target = recentEvents.find((e) => e?.id === highlightedEventId);
+    if (target) {
+      if (selectedProjectId !== "all" && target?.project_id !== selectedProjectId) {
+        setSelectedProjectId(target?.project_id);
+      }
+      if (filterPassed !== "all") {
+        setFilterPassed("all");
+      }
+      if (searchKeyword) {
+        setSearchKeyword("");
+      }
+    }
+
+    const timer = setTimeout(() => {
+      const el = document.getElementById(`audit-event-${highlightedEventId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }, 150);
+
+    const clearTimer = setTimeout(() => {
+      setHighlightedEventId(null);
+    }, 4500);
+
+    return () => {
+      clearTimeout(timer);
+      clearTimeout(clearTimer);
+    };
+  }, [highlightedEventId, recentEvents, selectedProjectId, filterPassed, searchKeyword, setSelectedProjectId, setHighlightedEventId]);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -566,25 +605,28 @@ export function QualityDashboardView() {
                 </tr>
               ) : (
                 filteredEvents.map((ev) => {
-                  const isExpanded = selectedEventId === ev.id;
-                  const isRead = readEventIds.includes(ev.id);
+                  const isExpanded = selectedEventId === ev?.id;
+                  const isRead = readEventIds?.includes(ev?.id) ?? false;
+                  const isHighlighted = highlightedEventId === ev?.id;
 
                   return (
-                    <React.Fragment key={ev.id}>
+                    <React.Fragment key={ev?.id || Math.random().toString()}>
                       <tr
+                        id={`audit-event-${ev?.id}`}
                         className={cn(
-                          "hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors cursor-pointer",
-                          !ev.passed && "bg-rose-50/20 dark:bg-rose-950/10",
-                          !isRead && "bg-blue-50/20 dark:bg-blue-950/10 font-medium"
+                          "hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-all cursor-pointer relative",
+                          !ev?.passed && "bg-rose-50/20 dark:bg-rose-950/10",
+                          !isRead && "bg-blue-50/20 dark:bg-blue-950/10 font-medium",
+                          isHighlighted && "ring-2 ring-blue-500 shadow-xl bg-blue-100/80 dark:bg-blue-950/70 dark:ring-cyan-400"
                         )}
                         onClick={() => {
-                          setSelectedEventId(isExpanded ? null : ev.id);
-                          if (!isRead) markEventAsRead(ev.id);
+                          setSelectedEventId(isExpanded ? null : ev?.id);
+                          if (!isRead && ev?.id) markEventAsRead(ev?.id);
                         }}
                       >
                         <td className="py-2.5 px-3 whitespace-nowrap">
-                          <div className="flex items-center gap-1.5">
-                            {ev.passed ? (
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {ev?.passed ? (
                               <Chip
                                 size="sm"
                                 color="success"
@@ -604,6 +646,13 @@ export function QualityDashboardView() {
                               >
                                 拦截
                               </Chip>
+                            )}
+
+                            {isHighlighted && (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-bold text-white bg-gradient-to-r from-blue-600 to-indigo-600 px-2 py-0.5 rounded-full shadow-xs animate-bounce" title="当前已定位消息">
+                                <Target className="h-2.5 w-2.5" />
+                                目标消息
+                              </span>
                             )}
 
                             {!isRead ? (

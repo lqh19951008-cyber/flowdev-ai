@@ -19,6 +19,8 @@ import {
   Moon,
   Settings as SettingsIcon,
 } from "lucide-react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useFlowStore } from "@/stores/useFlowStore";
 import { useTheme } from "@/components/providers/HeroUIProvider";
 import { WORKFLOW_PRESETS } from "@/lib/presets";
@@ -26,6 +28,7 @@ import { PresetId } from "@/types/flow";
 import { cn } from "@/lib/utils";
 
 export function Header() {
+  const pathname = usePathname();
   const {
     isDrawerOpen,
     toggleDrawer,
@@ -58,8 +61,17 @@ export function Header() {
   const projectMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    fetchProjects();
-    (window as any).__setActiveViewMode = setActiveViewMode;
+    fetchProjects?.();
+    if (typeof window !== "undefined" && process.env.NODE_ENV === "development") {
+      (window as any).__setActiveViewMode = setActiveViewMode;
+    }
+    return () => {
+      if (typeof window !== "undefined") {
+        try {
+          delete (window as any).__setActiveViewMode;
+        } catch (e) {}
+      }
+    };
   }, [fetchProjects, setActiveViewMode]);
 
   // Close menus when clicking outside
@@ -83,17 +95,17 @@ export function Header() {
   }, []);
 
   const handleSelectPreset = (presetId: PresetId) => {
-    loadPreset(presetId);
+    loadPreset?.(presetId);
     setIsPresetMenuOpen(false);
   };
 
   const handleSavePolicyToProject = async () => {
     const targetProject =
       selectedProjectId === "all"
-        ? projects[0]?.id || "rxjs"
-        : selectedProjectId;
+        ? (projects?.[0]?.id ?? "rxjs")
+        : (selectedProjectId ?? "rxjs");
     setIsSavingPolicy(true);
-    const ok = await saveCurrentPolicyToProject(targetProject);
+    const ok = await saveCurrentPolicyToProject?.(targetProject);
     setIsSavingPolicy(false);
     if (ok) {
       setIsPolicySaved(true);
@@ -145,13 +157,14 @@ export function Header() {
 
         <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
 
-        {/* Segmented View Switcher: 研发质量大盘 vs 门禁策略编排 */}
-        <div className="flex items-center bg-slate-100 dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-800 rounded-lg p-0.5 shrink-0">
-          <button
+        {/* Navigation Tabs (Next.js Link Routes) */}
+        <nav className="flex items-center bg-slate-100 dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-800 rounded-lg p-0.5 shrink-0">
+          <Link
+            href="/dashboard"
             onClick={() => setActiveViewMode("dashboard")}
             className={cn(
               "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-all whitespace-nowrap font-medium",
-              activeViewMode === "dashboard"
+              (pathname === "/dashboard" || pathname === "/" || (activeViewMode === "dashboard" && pathname !== "/pipeline" && pathname !== "/projects" && pathname !== "/settings"))
                 ? "bg-blue-600 text-white font-semibold shadow-sm shadow-blue-500/30"
                 : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
             )}
@@ -159,12 +172,14 @@ export function Header() {
           >
             <BarChart3 className="h-3.5 w-3.5 shrink-0" />
             <span>质量大盘</span>
-          </button>
-          <button
+          </Link>
+
+          <Link
+            href="/pipeline"
             onClick={() => setActiveViewMode("pipeline")}
             className={cn(
               "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-all whitespace-nowrap font-medium",
-              activeViewMode === "pipeline"
+              pathname === "/pipeline"
                 ? "bg-blue-600 text-white font-semibold shadow-sm shadow-blue-500/30"
                 : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
             )}
@@ -172,8 +187,36 @@ export function Header() {
           >
             <Sliders className="h-3.5 w-3.5 shrink-0" />
             <span>门禁编排</span>
-          </button>
-        </div>
+          </Link>
+
+          <Link
+            href="/projects"
+            className={cn(
+              "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-all whitespace-nowrap font-medium",
+              pathname === "/projects"
+                ? "bg-blue-600 text-white font-semibold shadow-sm shadow-blue-500/30"
+                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
+            )}
+            title="项目治理中心与卡点管理"
+          >
+            <FolderGit2 className="h-3.5 w-3.5 shrink-0" />
+            <span>项目治理</span>
+          </Link>
+
+          <Link
+            href="/settings"
+            className={cn(
+              "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-all whitespace-nowrap font-medium",
+              pathname === "/settings"
+                ? "bg-blue-600 text-white font-semibold shadow-sm shadow-blue-500/30"
+                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
+            )}
+            title="大模型与系统全局配置"
+          >
+            <SettingsIcon className="h-3.5 w-3.5 shrink-0" />
+            <span>系统设置</span>
+          </Link>
+        </nav>
 
         <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
 
@@ -186,7 +229,7 @@ export function Header() {
           >
             <FolderGit2 className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400 shrink-0" />
             <span className="font-mono max-w-[130px] truncate">
-              {activeViewMode === "pipeline"
+              {pathname === "/pipeline"
                 ? (selectedProjectId === "all" ? (projects[0]?.id || "rxjs") : selectedProjectId)
                 : (selectedProjectId === "all" ? "全部项目" : selectedProjectId)}
             </span>
@@ -218,13 +261,14 @@ export function Header() {
                     )}
                   </button>
                 )}
-                {projects.map((proj) => {
+                {(projects ?? []).map((proj) => {
+                  if (!proj?.id) return null;
                   const isCur = selectedProjectId === proj.id;
                   return (
                     <button
                       key={proj.id}
                       onClick={() => {
-                        setSelectedProjectId(proj.id);
+                        setSelectedProjectId?.(proj.id);
                         setIsProjectMenuOpen(false);
                       }}
                       className={cn(
@@ -236,15 +280,15 @@ export function Header() {
                     >
                       <div className="min-w-0">
                         <div className="font-mono text-slate-800 dark:text-slate-100 font-semibold truncate">
-                          {proj.id}
+                          {proj?.id}
                         </div>
                         <div className="text-[10px] text-slate-500 dark:text-slate-400 line-clamp-1">
-                          {proj.name}
+                          {proj?.name ?? proj?.id}
                         </div>
                       </div>
                       <div className="text-right shrink-0 ml-2">
                         <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400">
-                          {proj.pass_rate}%
+                          {proj?.pass_rate ?? 100}%
                         </span>
                         {isCur && (
                           <Check className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400 mt-0.5" />
@@ -261,7 +305,7 @@ export function Header() {
 
 
       {/* Right: Actions & Controls */}
-      {activeViewMode === "dashboard" ? (
+      {pathname !== "/pipeline" ? (
         <div className="flex items-center gap-2 shrink-0">
           {/* Refresh Data */}
           <button

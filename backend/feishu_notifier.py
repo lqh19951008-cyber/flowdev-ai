@@ -30,7 +30,7 @@ class FeishuNotifier:
         suggestions: List[str],
         summary: str,
         files_count: int,
-        dashboard_url: str = "http://localhost:3000/?view=dashboard",
+        dashboard_url: str = "http://localhost:3000/dashboard",
         webhook_url: Optional[str] = None,
     ) -> bool:
         """Sends an interactive card alert to Feishu group."""

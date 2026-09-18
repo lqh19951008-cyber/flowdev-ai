@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { HeroUIProvider } from "@/components/providers/HeroUIProvider";
+import { AppShell } from "@/components/layout/AppShell";
 
 export const metadata: Metadata = {
   title: "FlowDev-AI | 企业研发效能与代码门禁管控中台",
@@ -24,7 +25,7 @@ export default function RootLayout({
     <html lang="zh-CN" suppressHydrationWarning>
       <body className="antialiased min-h-screen flex flex-col transition-colors duration-200">
         <HeroUIProvider>
-          {children}
+          <AppShell>{children}</AppShell>
         </HeroUIProvider>
       </body>
     </html>
