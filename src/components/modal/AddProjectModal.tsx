@@ -151,6 +151,17 @@ export function AddProjectModal(props?: AddProjectModalProps) {
 
   const idInputRef = useRef<HTMLInputElement>(null);
 
+  // 跨平台安装命令：必须置于任何早返回之前，避免 hooks 顺序变化
+  const [installShell, setInstallShell] = useState<"powershell" | "bash">("powershell");
+  useEffect(() => {
+    if (typeof navigator === "undefined") return;
+    // navigator.userAgentData 是实验性 API，做安全访问
+    const uaData = (navigator as { userAgentData?: { platform?: string } })?.userAgentData;
+    const platform: string =
+      uaData?.platform || (navigator as Navigator)?.platform || "";
+    setInstallShell(/win/i.test(platform) ? "powershell" : "bash");
+  }, []);
+
   useEffect(() => {
     if (typeof window !== "undefined") {
       const currentHost = window?.location?.hostname ?? "";
@@ -192,6 +203,14 @@ export function AddProjectModal(props?: AddProjectModalProps) {
   }, [projectId, projects]);
 
   if (!isOpen) return null;
+
+  // 安装命令的常量计算（非 hooks，可置于早返回之后）
+  const nodeInstallCmd = `node scripts/install-hook.js`;
+  const platformCommands = {
+    powershell: `Invoke-WebRequest -Uri "${serverUrl}/scripts/flowdev-hook.js" -OutFile ".git\\hooks\\pre-commit" -UseBasicParsing`,
+    bash: `curl -s "${serverUrl}/scripts/flowdev-hook.js" -o .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit`,
+  };
+  const installCmd = platformCommands[installShell];
 
   const resetForm = () => {
     setStep("config");
@@ -299,25 +318,6 @@ export function AddProjectModal(props?: AddProjectModalProps) {
     setCopiedKey(key);
     setTimeout(() => setCopiedKey(null), 2000);
   };
-
-  // 跨平台安装命令：自动检测平台，默认推荐对应 shell 的命令
-  const [installShell, setInstallShell] = useState<"powershell" | "bash">("powershell");
-  useEffect(() => {
-    if (typeof navigator === "undefined") return;
-    // navigator.userAgentData 是实验性 API，做安全访问
-    const uaData = (navigator as { userAgentData?: { platform?: string } })?.userAgentData;
-    const platform: string =
-      uaData?.platform || (navigator as Navigator)?.platform || "";
-    setInstallShell(/win/i.test(platform) ? "powershell" : "bash");
-  }, []);
-
-  const nodeInstallCmd = `node scripts/install-hook.js`;
-
-  const platformCommands = {
-    powershell: `Invoke-WebRequest -Uri "${serverUrl}/scripts/flowdev-hook.js" -OutFile ".git\\hooks\\pre-commit" -UseBasicParsing`,
-    bash: `curl -s "${serverUrl}/scripts/flowdev-hook.js" -o .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit`,
-  };
-  const installCmd = platformCommands[installShell];
 
   return (
     <div
