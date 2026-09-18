@@ -282,11 +282,16 @@ while ($elapsed -lt $maxWaitSeconds) {
 }
 Write-Host ""
 
-# 读取旧 PID 记录进行合并
+# 读取旧 PID 记录进行合并 (统一转回 hashtable，避免 PSCustomObject 不支持 .属性=值 赋值导致崩溃)
 $pidRecord = @{}
 if (Test-Path $PidFile) {
     try {
-        $pidRecord = Get-Content $PidFile -Raw -Encoding UTF8 | ConvertFrom-Json
+        $oldRecord = Get-Content $PidFile -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($null -ne $oldRecord) {
+            foreach ($prop in $oldRecord.PSObject.Properties) {
+                $pidRecord[$prop.Name] = $prop.Value
+            }
+        }
     } catch {}
 }
 
