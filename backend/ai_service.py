@@ -81,12 +81,12 @@ class LLMService:
                                     except json.JSONDecodeError:
                                         continue
                     return
-                except Exception as e:
-                    logger.warning(f"Key {idx+1}/{len(keys)} connection error: {e}")
+                except Exception as err:
+                    logger.warning(f"Key {idx+1}/{len(keys)} connection error: {err}")
                     if idx < len(keys) - 1:
                         continue  # Try next key in pool
-                logger.warning(f"Error calling LLM API ({e}), falling back to simulation.")
-                yield f"\n> [系统提示: 外部 API 连接异常 ({type(e).__name__})，已无缝切换为智能自适应引擎]\n\n"
+                    logger.warning(f"Error calling LLM API ({err}), falling back to simulation.")
+                    yield f"\n> [系统提示: 外部 API 连接异常 ({type(err).__name__})，已无缝切换为智能自适应引擎]\n\n"
 
         # Fallback simulation
         async for token in cls._simulate_stream(messages):

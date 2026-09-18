@@ -445,9 +445,6 @@ class CliScanner:
                     critical.append(f"[{filename}] 第 {idx} 行存在对 null 对象的直接属性访问，将导致运行时 TypeError 崩溃！")
                 if re.search(r"\bundefined\.[a-zA-Z0-9_]+", line):
                     critical.append(f"[{filename}] 第 {idx} 行存在对 undefined 的属性访问，将导致运行时 TypeError 崩溃！")
-                # Specific check for unhandled null in payments/handlers
-                if "null" in line and ("throw" not in line and "if" not in line and "==" not in line and "===" not in line):
-                    critical.append(f"[{filename}] 第 {idx} 行存在未处理的 null 异常隐患")
 
                 # Detect unhandled nullable chaining like `obj.a.b` without optional chaining
                 if re.search(r"[a-zA-Z0-9_]+\.[a-zA-Z0-9_]+\.[a-zA-Z0-9_]+", line) and "?." not in line:
