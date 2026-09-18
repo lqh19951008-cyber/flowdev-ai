@@ -157,14 +157,14 @@ export function Header() {
 
         <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
 
-        {/* Navigation Tabs (Next.js Link Routes) */}
+        {/* Navigation Tabs (Next.js Link Routes) - Clean 2-Pillar Core */}
         <nav className="flex items-center bg-slate-100 dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-800 rounded-lg p-0.5 shrink-0">
           <Link
             href="/dashboard"
             onClick={() => setActiveViewMode("dashboard")}
             className={cn(
-              "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-all whitespace-nowrap font-medium",
-              (pathname === "/dashboard" || pathname === "/" || (activeViewMode === "dashboard" && pathname !== "/pipeline" && pathname !== "/projects" && pathname !== "/settings"))
+              "flex items-center gap-1.5 px-3 py-1 rounded-md text-xs transition-all whitespace-nowrap font-medium",
+              pathname === "/dashboard" || pathname === "/" || activeViewMode === "dashboard"
                 ? "bg-blue-600 text-white font-semibold shadow-sm shadow-blue-500/30"
                 : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
             )}
@@ -178,7 +178,7 @@ export function Header() {
             href="/pipeline"
             onClick={() => setActiveViewMode("pipeline")}
             className={cn(
-              "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-all whitespace-nowrap font-medium",
+              "flex items-center gap-1.5 px-3 py-1 rounded-md text-xs transition-all whitespace-nowrap font-medium",
               pathname === "/pipeline"
                 ? "bg-blue-600 text-white font-semibold shadow-sm shadow-blue-500/30"
                 : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
@@ -188,82 +188,67 @@ export function Header() {
             <Sliders className="h-3.5 w-3.5 shrink-0" />
             <span>门禁编排</span>
           </Link>
-
-          <Link
-            href="/projects"
-            className={cn(
-              "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-all whitespace-nowrap font-medium",
-              pathname === "/projects"
-                ? "bg-blue-600 text-white font-semibold shadow-sm shadow-blue-500/30"
-                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
-            )}
-            title="项目治理中心与卡点管理"
-          >
-            <FolderGit2 className="h-3.5 w-3.5 shrink-0" />
-            <span>项目治理</span>
-          </Link>
-
-          <Link
-            href="/settings"
-            className={cn(
-              "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-all whitespace-nowrap font-medium",
-              pathname === "/settings"
-                ? "bg-blue-600 text-white font-semibold shadow-sm shadow-blue-500/30"
-                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
-            )}
-            title="大模型与系统全局配置"
-          >
-            <SettingsIcon className="h-3.5 w-3.5 shrink-0" />
-            <span>系统设置</span>
-          </Link>
         </nav>
 
         <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
 
-        {/* Project Selector Dropdown */}
+        {/* Enhanced Project Selector Dropdown */}
         <div className="relative shrink-0" ref={projectMenuRef}>
           <button
             onClick={() => setIsProjectMenuOpen(!isProjectMenuOpen)}
-            className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-900/90 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 rounded-lg transition-colors whitespace-nowrap"
-            title="切换监控的代码仓库"
+            className="flex items-center gap-1.5 px-3 py-1 text-xs font-semibold text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-900 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-300/80 dark:border-slate-700/80 rounded-lg transition-all shadow-xs whitespace-nowrap cursor-pointer"
+            title="切换当前监控/编排的目标代码仓库"
           >
-            <FolderGit2 className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400 shrink-0" />
-            <span className="font-mono max-w-[130px] truncate">
+            <FolderGit2 className="h-3.5 w-3.5 text-blue-600 dark:text-cyan-400 shrink-0" />
+            <span className="text-slate-500 dark:text-slate-400 font-normal">项目:</span>
+            <span className="font-mono max-w-[140px] truncate text-blue-700 dark:text-cyan-300">
               {pathname === "/pipeline"
-                ? (selectedProjectId === "all" ? (projects[0]?.id || "rxjs") : selectedProjectId)
+                ? (selectedProjectId === "all" ? (projects?.[0]?.id ?? "rxjs") : selectedProjectId)
                 : (selectedProjectId === "all" ? "全部项目" : selectedProjectId)}
             </span>
-            <ChevronDown className="h-3 w-3 text-slate-400 shrink-0" />
+            <ChevronDown className="h-3 w-3 text-slate-400 shrink-0 ml-0.5" />
           </button>
 
           {isProjectMenuOpen && (
-            <div className="absolute left-0 mt-1.5 w-64 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950/95 shadow-2xl p-1.5 z-50 backdrop-blur animate-in fade-in zoom-in-95 duration-100">
-              <div className="px-2 py-1 text-[10px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
-                {activeViewMode === "pipeline" ? "切换编排目标仓库" : "选择监控项目仓库"}
+            <div className="absolute left-0 mt-1.5 w-72 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 shadow-2xl p-2 z-50 backdrop-blur animate-in fade-in zoom-in-95 duration-100">
+              <div className="flex items-center justify-between px-1.5 pb-1.5 mb-1.5 border-b border-slate-100 dark:border-slate-800 text-[11px] font-semibold text-slate-500">
+                <span>{pathname === "/pipeline" ? "🎯 切换编排目标仓库" : "📦 选择监控代码仓库"}</span>
+                <span className="font-mono text-[10px] text-slate-400">{projects?.length ?? 0} 个仓库</span>
               </div>
-              <div className="space-y-1 mt-1">
-                {activeViewMode === "dashboard" && (
+              <div className="space-y-1 max-h-64 overflow-y-auto pr-0.5">
+                {pathname !== "/pipeline" && (
                   <button
                     onClick={() => {
-                      setSelectedProjectId("all");
+                      setSelectedProjectId?.("all");
                       setIsProjectMenuOpen(false);
                     }}
                     className={cn(
-                      "w-full text-left px-2.5 py-1.5 rounded-lg flex items-center justify-between text-xs transition-colors",
+                      "w-full text-left px-2.5 py-1.5 rounded-lg flex items-center justify-between text-xs transition-colors cursor-pointer",
                       selectedProjectId === "all"
-                        ? "bg-cyan-500/15 text-cyan-700 dark:text-cyan-300 font-medium"
+                        ? "bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 font-semibold border border-blue-200 dark:border-blue-800/60"
                         : "text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-900"
                     )}
                   >
                     <span>全部项目 (全局监控)</span>
                     {selectedProjectId === "all" && (
-                      <Check className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400" />
+                      <Check className="h-3.5 w-3.5 text-blue-600 dark:text-cyan-400" />
                     )}
                   </button>
                 )}
                 {(projects ?? []).map((proj) => {
                   if (!proj?.id) return null;
-                  const isCur = selectedProjectId === proj.id;
+                  const isCur =
+                    pathname === "/pipeline"
+                      ? (selectedProjectId === "all" ? (projects?.[0]?.id === proj.id) : selectedProjectId === proj.id)
+                      : selectedProjectId === proj.id;
+
+                  const gateLabel =
+                    proj?.failure_action === "disabled" || proj?.gate_enabled === false
+                      ? "⚪ 关闭"
+                      : proj?.failure_action === "warn_only"
+                      ? "⚠️ 仅提示"
+                      : "🛑 阻断";
+
                   return (
                     <button
                       key={proj.id}
@@ -272,26 +257,31 @@ export function Header() {
                         setIsProjectMenuOpen(false);
                       }}
                       className={cn(
-                        "w-full text-left px-2.5 py-2 rounded-lg flex items-start justify-between text-xs transition-colors",
+                        "w-full text-left px-2.5 py-2 rounded-lg flex items-start justify-between text-xs transition-colors cursor-pointer",
                         isCur
-                          ? "bg-cyan-500/15 text-cyan-700 dark:text-cyan-300 font-medium"
+                          ? "bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 font-semibold border border-blue-200 dark:border-blue-800/60"
                           : "text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-900"
                       )}
                     >
-                      <div className="min-w-0">
-                        <div className="font-mono text-slate-800 dark:text-slate-100 font-semibold truncate">
-                          {proj?.id}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono text-slate-800 dark:text-slate-100 font-semibold truncate">
+                            {proj.id}
+                          </span>
+                          <span className="text-[9px] px-1 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-slate-500 font-medium">
+                            {gateLabel}
+                          </span>
                         </div>
-                        <div className="text-[10px] text-slate-500 dark:text-slate-400 line-clamp-1">
+                        <div className="text-[10px] text-slate-500 dark:text-slate-400 line-clamp-1 mt-0.5">
                           {proj?.name ?? proj?.id}
                         </div>
                       </div>
                       <div className="text-right shrink-0 ml-2">
-                        <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400">
+                        <span className="text-[10px] font-mono font-medium text-emerald-600 dark:text-emerald-400">
                           {proj?.pass_rate ?? 100}%
                         </span>
                         {isCur && (
-                          <Check className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400 mt-0.5" />
+                          <Check className="h-3.5 w-3.5 text-blue-600 dark:text-cyan-400 mt-0.5 ml-auto" />
                         )}
                       </div>
                     </button>

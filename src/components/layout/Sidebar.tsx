@@ -12,6 +12,7 @@ import {
   ChevronRight,
   Move,
   Info,
+  FolderGit2,
 } from "lucide-react";
 import { Chip } from "@heroui/react";
 import { useFlowStore } from "@/stores/useFlowStore";
@@ -94,7 +95,7 @@ const ITEM_THEMES: Record<
 };
 
 export function Sidebar() {
-  const { isSidebarOpen, toggleSidebar } = useFlowStore();
+  const { isSidebarOpen, toggleSidebar, projects, selectedProjectId, setSelectedProjectId } = useFlowStore();
 
   const onDragStart = (event: React.DragEvent, nodeType: FlowNodeType) => {
     event.dataTransfer.setData("application/reactflow", nodeType);
@@ -102,6 +103,10 @@ export function Sidebar() {
     event.dataTransfer.setData("text", nodeType);
     event.dataTransfer.effectAllowed = "move";
   };
+
+  const currentProj =
+    (projects ?? []).find((p) => p.id === (selectedProjectId === "all" ? (projects?.[0]?.id ?? "rxjs") : selectedProjectId)) ??
+    projects?.[0];
 
   return (
     <aside
@@ -137,7 +142,7 @@ export function Sidebar() {
             </div>
             <button
               onClick={() => toggleSidebar(false)}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors"
+              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors cursor-pointer"
               title="折叠算子栏"
             >
               <ChevronLeft className="h-4 w-4" />
@@ -146,7 +151,7 @@ export function Sidebar() {
         ) : (
           <button
             onClick={() => toggleSidebar(true)}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-100 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-100 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors cursor-pointer"
             title="展开算子物料库"
           >
             <ChevronRight className="h-4 w-4 text-blue-500 dark:text-blue-400" />
@@ -185,12 +190,36 @@ export function Sidebar() {
       ) : (
         /* Expanded State: Refined HeroUI Cards List (Drag Only) */
         <div className="flex-1 overflow-y-auto p-2.5 space-y-2.5">
+          {/* Target Project Selector Card */}
+          <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-800 shadow-xs">
+            <div className="flex items-center justify-between text-[11px] mb-1.5">
+              <span className="text-slate-500 dark:text-slate-400 font-medium flex items-center gap-1">
+                <FolderGit2 className="h-3.5 w-3.5 text-blue-600 dark:text-cyan-400" />
+                编排目标仓库
+              </span>
+              <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-medium">
+                {currentProj?.pass_rate ?? 100}% 放行
+              </span>
+            </div>
+            <select
+              value={selectedProjectId === "all" ? (projects?.[0]?.id ?? "rxjs") : selectedProjectId}
+              onChange={(e) => setSelectedProjectId?.(e.target.value)}
+              className="w-full h-7 text-xs font-mono font-semibold bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg px-2 text-slate-800 dark:text-slate-200 focus:outline-none focus:border-blue-500 cursor-pointer shadow-2xs"
+            >
+              {(projects ?? []).map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.id} ({p.name || p.id})
+                </option>
+              ))}
+            </select>
+          </div>
+
           <div className="text-[10px] text-slate-400 dark:text-slate-500 px-1 font-mono flex items-center justify-between">
             <span className="flex items-center gap-1">
               <Move className="h-3 w-3" />
-              拖拽放入右侧画布
+              拖拽算子放入右侧画布
             </span>
-            <span>仅限拖拽</span>
+            <span>算子节点</span>
           </div>
 
           {PALETTE_ITEMS.map((item) => {

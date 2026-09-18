@@ -1,12 +1,20 @@
 "use client";
 
-import React, { Suspense } from "react";
-import { SystemSettingsView } from "@/components/settings/SystemSettingsView";
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { QualityDashboardView } from "@/components/dashboard/QualityDashboardView";
+import { useFlowStore } from "@/stores/useFlowStore";
 
 export default function SettingsPage() {
-  return (
-    <Suspense fallback={<div className="p-8 text-center text-xs text-slate-400">正在加载系统设置...</div>}>
-      <SystemSettingsView />
-    </Suspense>
-  );
+  const router = useRouter();
+  const setSettingsModalOpen = useFlowStore((s) => s?.setSettingsModalOpen);
+  const setActiveViewMode = useFlowStore((s) => s?.setActiveViewMode);
+
+  useEffect(() => {
+    setActiveViewMode?.("dashboard");
+    setSettingsModalOpen?.(true, "llm");
+    router?.replace?.("/dashboard");
+  }, [router, setSettingsModalOpen, setActiveViewMode]);
+
+  return <QualityDashboardView />;
 }
