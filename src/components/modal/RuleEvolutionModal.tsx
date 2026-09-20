@@ -26,6 +26,10 @@ import {
   Lightbulb,
   GitBranch,
   Wand2,
+  Send,
+  Bell,
+  BellOff,
+  CircleDot,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ScanEventItem, SynthesizedRule, CustomGateRule, AgentSkillItem } from "@/types/flow";
@@ -64,6 +68,29 @@ export function RuleEvolutionModal({
   const [libSkills, setLibSkills] = useState<AgentSkillItem[]>([]);
   const [libLoading, setLibLoading] = useState(false);
   const [serverUrl, setServerUrl] = useState("http://127.0.0.1:8000");
+
+  // ---- Push Mode state (server -> local repo, one-key confirmation) ----
+  const [pushState, setPushState] = useState<{
+    policy_version: string;
+    pending_push_version: string | null;
+    last_applied_version: string;
+    push_enabled: boolean;
+    pending: boolean;
+    changelog: Array<{ reason?: string; version?: string; at?: string }>;
+    last_pushed_at: string | null;
+    last_applied_at: string | null;
+  }>({
+    policy_version: "0.0.0",
+    pending_push_version: null,
+    last_applied_version: "0.0.0",
+    push_enabled: true,
+    pending: false,
+    changelog: [],
+    last_pushed_at: null,
+    last_applied_at: null,
+  });
+  const [pushLoading, setPushLoading] = useState(false);
+  const [pushToast, setPushToast] = useState<{ kind: "success" | "error" | "info"; text: string } | null>(null);
 
   // Fetch or synthesize when opened
   useEffect(() => {
@@ -196,6 +223,128 @@ export function RuleEvolutionModal({
     setCopiedKey(key);
     setTimeout(() => setCopiedKey(null), 2000);
   };
+
+  // ============ Push Mode handlers (server -> local repo) ============
+  const fetchPushState = async () => {
+    try {
+      const res = await fetch(
+        `http://127.0.0.1:8000/api/projects/${encodeURIComponent(targetProjectId)}/sync-status`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setPushState((prev) => ({
+          policy_version: data.latest_version ?? prev.policy_version,
+          pending_push_version: data.pending_push_version ?? null,
+          last_applied_version: data.last_applied_version ?? prev.last_applied_version,
+          push_enabled: data.push_enabled ?? prev.push_enabled,
+          pending: Boolean(data.pending),
+          changelog: data.changelog ?? prev.changelog,
+          last_pushed_at: data.last_pushed_at ?? prev.last_pushed_at,
+          last_applied_at: data.last_applied_at ?? prev.last_applied_at,
+        }));
+      }
+    } catch (err) {
+      console.error("Failed to fetch push state", err);
+    }
+  };
+
+  const handleTriggerPush = async () => {
+    if (pushLoading) return;
+    setPushLoading(true);
+    setPushToast(null);
+    try {
+      const res = await fetch(
+        `http://127.0.0.1:8000/api/projects/${encodeURIComponent(targetProjectId)}/push`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason: "从规则治理中心推送" }),
+        }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const version = data?.version || data?.push_state?.policy_version;
+        setPushToast({
+          kind: "success",
+          text: `已标记 v${version} 待推送到本地仓库。开发者下次 git commit 时只需按 Y 确认即可同步。`,
+        });
+        await fetchPushState();
+        if (onRuleApplied) onRuleApplied();
+      } else {
+        const errText = await res.text().catch(() => "");
+        setPushToast({ kind: "error", text: `推送失败：HTTP ${res.status} ${errText?.slice(0, 120) ?? ""}` });
+      }
+    } catch (err: any) {
+      setPushToast({ kind: "error", text: `推送失败：${err?.message ?? err}` });
+    } finally {
+      setPushLoading(false);
+      setTimeout(() => setPushToast(null), 6000);
+    }
+  };
+
+  const handleTogglePushEnabled = async () => {
+    if (pushLoading) return;
+    setPushLoading(true);
+    try {
+      const res = await fetch(
+        `http://127.0.0.1:8000/api/projects/${encodeURIComponent(targetProjectId)}/push-enabled`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: !pushState.push_enabled }),
+        }
+      );
+      if (res.ok) {
+        await fetchPushState();
+      }
+    } catch (err) {
+      console.error("toggle push-enabled failed", err);
+    } finally {
+      setPushLoading(false);
+    }
+  };
+
+  const handleCancelPending = async () => {
+    if (pushLoading) return;
+    setPushLoading(true);
+    try {
+      await fetch(
+        `http://127.0.0.1:8000/api/projects/${encodeURIComponent(targetProjectId)}/cancel-push`,
+        { method: "POST" }
+      );
+      await fetchPushState();
+      setPushToast({ kind: "info", text: "已取消本次待推送标记。本地开发者下次 commit 不会再收到询问。" });
+      setTimeout(() => setPushToast(null), 4000);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setPushLoading(false);
+    }
+  };
+
+  // Subscribe to SSE so we can refresh push state in real time across all open tabs.
+  useEffect(() => {
+    if (!isOpen) return;
+    fetchPushState();
+    let es: EventSource | null = null;
+    try {
+      es = new EventSource("http://127.0.0.1:8000/api/events/stream");
+      const onPush = () => fetchPushState();
+      const onApplied = () => fetchPushState();
+      const onCancelled = () => fetchPushState();
+      es.addEventListener("rule_pushed", onPush);
+      es.addEventListener("rule_applied", onApplied);
+      es.addEventListener("rule_push_cancelled", onCancelled);
+    } catch (err) {
+      console.warn("SSE subscribe failed", err);
+    }
+    return () => {
+      try {
+        es?.close();
+      } catch (e) {}
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, targetProjectId]);
 
   const handleDownloadCursorRules = (content: string, filename: string = ".cursorrules") => {
     const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
@@ -641,6 +790,16 @@ export function RuleEvolutionModal({
                 </div>
               </div>
 
+              {/* Push Mode: server -> local repo, one-key confirmation */}
+              <PushModeCard
+                pushState={pushState}
+                pushLoading={pushLoading}
+                pushToast={pushToast}
+                onTriggerPush={handleTriggerPush}
+                onCancelPending={handleCancelPending}
+                onToggleEnabled={handleTogglePushEnabled}
+              />
+
               {/* Developer Skill Usage & Consumption Guide */}
               <div className="p-4 rounded-xl border border-indigo-200/80 dark:border-indigo-900/50 bg-gradient-to-br from-indigo-50/60 via-white to-indigo-50/20 dark:from-indigo-950/30 dark:via-slate-900 dark:to-slate-900/50 space-y-3 shadow-sm">
                 <div className="flex items-center justify-between">
@@ -932,5 +1091,212 @@ export function RuleEvolutionModal({
       </div>
     </div>,
     document.body
+  );
+}
+// ---------------------------------------------------------------------------
+// Push Mode Card — "一键推送至本地代码仓库"
+// ---------------------------------------------------------------------------
+interface PushStateShape {
+  policy_version: string;
+  pending_push_version: string | null;
+  last_applied_version: string;
+  push_enabled: boolean;
+  pending: boolean;
+  changelog: Array<{ reason?: string; version?: string; at?: string }>;
+  last_pushed_at: string | null;
+  last_applied_at: string | null;
+}
+
+interface PushModeCardProps {
+  pushState: PushStateShape;
+  pushLoading: boolean;
+  pushToast: { kind: "success" | "error" | "info"; text: string } | null;
+  onTriggerPush: () => void;
+  onCancelPending: () => void;
+  onToggleEnabled: () => void;
+}
+
+function PushModeCard({
+  pushState,
+  pushLoading,
+  pushToast,
+  onTriggerPush,
+  onCancelPending,
+  onToggleEnabled,
+}: PushModeCardProps) {
+  const lastAppliedDisplay = pushState.last_applied_at
+    ? pushState.last_applied_at.replace("T", " ").replace("Z", "").slice(0, 19)
+    : null;
+
+  return (
+    <div
+      className={cn(
+        "p-3.5 rounded-xl border space-y-2.5 shadow-sm transition-colors",
+        pushState.pending
+          ? "border-amber-300 dark:border-amber-700/60 bg-gradient-to-br from-amber-50 via-white to-amber-50/30 dark:from-amber-950/30 dark:via-slate-900 dark:to-slate-900/50"
+          : "border-emerald-200/80 dark:border-emerald-900/50 bg-gradient-to-br from-emerald-50/60 via-white to-emerald-50/20 dark:from-emerald-950/30 dark:via-slate-900 dark:to-slate-900/50"
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="space-y-1 min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Send
+              className={cn(
+                "h-4 w-4",
+                pushState.pending
+                  ? "text-amber-600 dark:text-amber-400"
+                  : "text-emerald-600 dark:text-emerald-400"
+              )}
+            />
+            <span className="text-xs font-bold text-slate-900 dark:text-slate-100">
+              📤 一键推送至本地代码仓库
+            </span>
+            <span
+              className={cn(
+                "px-1.5 py-0.5 rounded text-[10px] font-mono border",
+                pushState.pending
+                  ? "bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-800"
+                  : "bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800"
+              )}
+            >
+              v{pushState.policy_version}
+            </span>
+            {pushState.pending && (
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300 border border-rose-300 dark:border-rose-800 animate-pulse">
+                ● 待本地确认
+              </span>
+            )}
+          </div>
+
+          <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
+            {pushState.pending ? (
+              <>
+                本地开发者下次{" "}
+                <code className="px-1 rounded bg-slate-100 dark:bg-slate-800 font-mono">
+                  git commit
+                </code>{" "}
+                时，终端会询问是否同步{" "}
+                <code className="px-1 rounded bg-amber-100 dark:bg-amber-900/40 font-mono">
+                  v{pushState.policy_version}
+                </code>
+                ，按{" "}
+                <kbd className="px-1 rounded border border-amber-300 dark:border-amber-700 font-mono">
+                  Y
+                </kbd>{" "}
+                即自动写入 AGENTS.md / .cursorrules / SKILL.md 并随本次提交入库。
+              </>
+            ) : lastAppliedDisplay ? (
+              <>
+                ✅ 最近一次推送{" "}
+                <code className="px-1 rounded bg-slate-100 dark:bg-slate-800 font-mono">
+                  v{pushState.last_applied_version}
+                </code>{" "}
+                已于{" "}
+                <span className="font-mono text-emerald-700 dark:text-emerald-300">
+                  {lastAppliedDisplay}
+                </span>{" "}
+                被开发者应用入库。
+              </>
+            ) : (
+              <>
+                点击「推送」后，规则更新会在开发者下次{" "}
+                <code className="px-1 rounded bg-slate-100 dark:bg-slate-800 font-mono">
+                  git commit
+                </code>{" "}
+                时主动下发，开发者只需在终端按一次{" "}
+                <kbd className="px-1 rounded border border-slate-300 dark:border-slate-700 font-mono">
+                  Y
+                </kbd>{" "}
+                确认即可，零手动同步命令。
+              </>
+            )}
+          </p>
+        </div>
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          {pushState.pending && (
+            <button
+              onClick={onCancelPending}
+              disabled={pushLoading}
+              className="px-2.5 py-1.5 text-[11px] rounded-md border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors disabled:opacity-50"
+              title="取消本次推送标记"
+            >
+              取消
+            </button>
+          )}
+          <button
+            onClick={onToggleEnabled}
+            disabled={pushLoading}
+            className={cn(
+              "p-1.5 rounded-md border transition-colors disabled:opacity-50",
+              pushState.push_enabled
+                ? "border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-950/50"
+                : "border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700"
+            )}
+            title={pushState.push_enabled ? "推送模式已开启 · 点击关闭" : "推送模式已关闭 · 点击开启"}
+          >
+            {pushState.push_enabled ? <Bell className="h-3.5 w-3.5" /> : <BellOff className="h-3.5 w-3.5" />}
+          </button>
+          <button
+            onClick={onTriggerPush}
+            disabled={pushLoading || !pushState.push_enabled}
+            className={cn(
+              "px-3 py-1.5 text-[11px] font-bold rounded-md transition-all flex items-center gap-1.5",
+              pushState.pending
+                ? "bg-amber-500 hover:bg-amber-600 text-white shadow-sm"
+                : "bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-700 hover:to-cyan-700 text-white shadow-sm",
+              (pushLoading || !pushState.push_enabled) && "opacity-50 cursor-not-allowed"
+            )}
+          >
+            {pushLoading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+            {pushState.pending ? "再次推送新版本" : "推送至本地仓库"}
+          </button>
+        </div>
+      </div>
+
+      {pushToast && (
+        <div
+          className={cn(
+            "px-2.5 py-1.5 rounded-md text-[11px] flex items-start gap-1.5 border",
+            pushToast.kind === "success"
+              ? "bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800"
+              : pushToast.kind === "error"
+              ? "bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800"
+              : "bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700"
+          )}
+        >
+          {pushToast.kind === "success" ? (
+            <CheckCircle2 className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          ) : pushToast.kind === "error" ? (
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          ) : (
+            <CircleDot className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          )}
+          <span className="flex-1">{pushToast.text}</span>
+        </div>
+      )}
+
+      <div className="flex items-center gap-1 text-[10px] text-slate-500 dark:text-slate-400 font-mono flex-wrap">
+        <span className="px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/60">
+          ① 点击推送
+        </span>
+        <ArrowRight className="h-3 w-3" />
+        <span className="px-1.5 py-0.5 rounded bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/60">
+          ② 后端标记 pending_push_version
+        </span>
+        <ArrowRight className="h-3 w-3" />
+        <span className="px-1.5 py-0.5 rounded bg-cyan-50 dark:bg-cyan-950/30 text-cyan-700 dark:text-cyan-300 border border-cyan-200/60 dark:border-cyan-800/60">
+          ③ 本地 git commit → 终端询问 Y/n
+        </span>
+        <ArrowRight className="h-3 w-3" />
+        <span className="px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60">
+          ④ 自动写入 + git add
+        </span>
+        <ArrowRight className="h-3 w-3" />
+        <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200/60 dark:border-slate-700/60">
+          ⑤ 入库 · 团队 pull 即生效
+        </span>
+      </div>
+    </div>
   );
 }

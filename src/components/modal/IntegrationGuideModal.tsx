@@ -66,9 +66,11 @@ export function IntegrationGuideModal({
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
-  const gitHookScriptCmd = `# 1. 一键将探针接入当前 Git 仓库
-curl -s "${serverUrl}/scripts/flowdev-hook.js" -o .git/hooks/pre-commit
-chmod +x .git/hooks/pre-commit
+  const gitHookScriptCmd = `# 1. 一键接入探针 (PowerShell / Windows)
+New-Item -ItemType Directory -Force -Path .git/hooks | Out-Null; Invoke-WebRequest -Uri "${serverUrl}/scripts/flowdev-hook.js" -OutFile ".git/hooks/pre-commit" -UseBasicParsing; node .git/hooks/pre-commit --status
+
+# 或 (Bash / macOS / Linux)
+mkdir -p .git/hooks && curl -fsSL "${serverUrl}/scripts/flowdev-hook.js" -o .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit && node .git/hooks/pre-commit --status
 
 # 2. ⚡ 门禁控制开关 (随需切换，绝不阻断开发速度)：
 node .git/hooks/pre-commit --warn    # 切换为「仅提示不拦截」模式（推荐！AI照常给建议，但100%放行）

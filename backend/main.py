@@ -24,7 +24,7 @@ if hasattr(sys.stderr, "reconfigure"):
 
 from typing import Optional, Literal, Dict, Any, List
 from pydantic import BaseModel, Field
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, PlainTextResponse
 
@@ -43,7 +43,7 @@ from scheduler import WorkflowPayload
 from executor import WorkflowExecutor
 from cli_scanner import CliScanRequest, CliScanResponse, CliScanner
 
-from database import DatabaseService
+from database import DatabaseService, get_utc_now_iso, get_connection
 from event_bus import EventBus
 from ai_service import LLMService
 from agents import extract_code_block, extract_json_object
@@ -202,14 +202,50 @@ async def get_project_policy(project_id: str):
         "policy": policy,
         "custom_rules": policy.get("custom_rules", []),
         "agent_skills": policy.get("agent_skills", []),
+        "push_state": DatabaseService.get_project_push_state(project_id),
     }
+
+
+async def _broadcast_policy_change(project_id: str, reason: str = "") -> None:
+    """Bumps the project's policy_version and (if enabled) marks a pending push.
+
+    Called from every server-side endpoint that mutates a project's rules /
+    skills / gate-mode. This is what enables Push Mode: as soon as something
+    changes server-side, the next local git commit will see a fresh
+    `pending_push_version` and ask the developer for a one-key confirmation
+    before writing the new rule files into the working tree.
+    """
+    new_version = DatabaseService.bump_policy_version(project_id, reason=reason)
+    push_state = DatabaseService.get_project_push_state(project_id)
+    if push_state.get("push_enabled"):
+        # Stage the new version as awaiting local confirmation. The actual
+        # write to AGENTS.md / .cursorrules / SKILL.md happens on the
+        # developer side inside the Git hook.
+        DatabaseService.mark_pending_push(project_id, changelog=[
+            {"reason": reason or "规则更新", "version": new_version, "at": get_utc_now_iso()},
+        ])
+        push_state = DatabaseService.get_project_push_state(project_id)
+    await EventBus.broadcast("rule_pushed", {
+        "project_id": project_id,
+        "version": new_version,
+        "reason": reason,
+        "push_state": push_state,
+    })
+    return new_version
 
 
 @app.put("/api/projects/{project_id}/policy")
 async def update_project_policy(project_id: str, policy: dict):
     """Updates the custom DAG review policy for a project."""
     success = DatabaseService.update_project_policy(project_id, policy)
-    return {"success": success, "project_id": project_id}
+    new_version = None
+    if success:
+        new_version = await _broadcast_policy_change(project_id, reason="DAG 策略更新")
+    return {
+        "success": success,
+        "project_id": project_id,
+        "policy_version": new_version,
+    }
 
 
 @app.put("/api/projects/{project_id}/gate-mode")
@@ -428,12 +464,16 @@ async def apply_project_rule(project_id: str, payload: dict):
         policy["agent_skills"] = agent_skills
 
     success = DatabaseService.update_project_policy(project_id, policy)
+    new_version = None
+    if success:
+        new_version = await _broadcast_policy_change(project_id, reason="新增 / 更新防御规则与 Skill")
     return {
         "success": success,
         "project_id": project_id,
         "custom_rules_count": len(custom_rules),
         "agent_skills_count": len(agent_skills),
         "policy": policy,
+        "policy_version": new_version,
     }
 
 
@@ -459,18 +499,198 @@ async def delete_project_rule(project_id: str, payload: dict):
         policy["agent_skills"] = agent_skills
 
     success = DatabaseService.update_project_policy(project_id, policy)
+    new_version = None
+    if success:
+        new_version = await _broadcast_policy_change(project_id, reason="删除防御规则 / Skill")
     return {
         "success": success,
         "project_id": project_id,
         "custom_rules": policy.get("custom_rules", []),
         "agent_skills": policy.get("agent_skills", []),
+        "policy_version": new_version,
     }
+
+
+# ============================================================
+# Push Mode: rules -> local repo, one-key confirmation
+# ============================================================
+class TriggerPushPayload(BaseModel):
+    reason: Optional[str] = None
+    force: bool = False
+
+class AckPushPayload(BaseModel):
+    applied_version: Optional[str] = None
+    files_written: List[str] = []
+
+class PushEnabledPayload(BaseModel):
+    enabled: bool = True
+
+
+async def _read_json_body(request: Request) -> Dict[str, Any]:
+    """Robustly parses a JSON body, returning an empty dict on missing / empty body.
+
+    FastAPI + Pydantic v2 has known quirks where declaring `dict` as a parameter
+    type can fail with a generic "There was an error parsing the body" 400.
+    Reading the raw body and decoding it ourselves gives us a deterministic
+    fallback regardless of whether the caller sent `{}`, `{"reason": "..."}`,
+    or no body at all.
+    """
+    try:
+        body_bytes = await request.body()
+    except Exception:
+        return {}
+    if not body_bytes:
+        return {}
+    text = body_bytes.decode("utf-8", errors="replace").strip()
+    if not text:
+        return {}
+    try:
+        data = json.loads(text)
+    except Exception:
+        # Allow empty/blank body to silently coerce to {}.
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+@app.get("/api/projects/{project_id}/sync-status")
+async def get_sync_status(project_id: str, local_version: Optional[str] = None):
+    """Returns whether the server has a newer policy version awaiting local application.
+
+    Called by the Git pre-commit hook at the start of every commit so it can
+    decide whether to prompt the developer: "新规则 v0.0.5 待应用，是否同步？(Y/n)".
+    """
+    state = DatabaseService.get_project_push_state(project_id)
+    return {
+        "project_id": project_id,
+        "latest_version": state["policy_version"],
+        "local_version": local_version or state["last_applied_version"],
+        "pending_push_version": state["pending_push_version"],
+        "push_enabled": state["push_enabled"],
+        "pending": state["pending"],
+        "changelog": state["changelog"],
+        "last_pushed_at": state["last_pushed_at"],
+        "last_applied_at": state["last_applied_at"],
+        "last_applied_version": state["last_applied_version"],
+    }
+
+
+@app.post("/api/projects/{project_id}/push")
+async def trigger_push(project_id: str, request: Request):
+    """Manually stages a push from the Web control panel.
+
+    Bumps the policy version and marks it as `pending_push_version` so the
+    next local commit will offer the developer a one-key confirmation to
+    pull the new AGENTS.md / .cursorrules / SKILL.md into the working tree.
+    """
+    payload = await _read_json_body(request)
+    reason = (payload.get("reason") or "Web 控制台手动推送").strip()[:200]
+    force = bool(payload.get("force", False))
+
+    state = DatabaseService.get_project_push_state(project_id)
+    if not state["push_enabled"] and not force:
+        raise HTTPException(status_code=409, detail="当前项目已关闭推送模式 (push_enabled=false)")
+
+    new_version = DatabaseService.bump_policy_version(project_id, reason=reason)
+    push_state = DatabaseService.mark_pending_push(
+        project_id,
+        changelog=[{"reason": reason, "version": new_version, "at": get_utc_now_iso()}],
+        version=new_version,
+    )
+
+    await EventBus.broadcast("rule_pushed", {
+        "project_id": project_id,
+        "version": new_version,
+        "reason": reason,
+        "push_state": push_state,
+    })
+
+    return {
+        "success": True,
+        "project_id": project_id,
+        "version": new_version,
+        "push_state": push_state,
+        "message": f"已标记 {new_version} 待推送到本地仓库。下次 git commit 时会在终端询问是否同步（默认 Y）。",
+    }
+
+
+@app.post("/api/projects/{project_id}/ack-push")
+async def ack_push(project_id: str, request: Request):
+    """Called by the Git hook AFTER it has written new files into the working tree.
+
+    Clears the pending flag, stamps `last_applied_*`, and broadcasts
+    `rule_applied` over the event bus so the Web control panel can flip the
+    card to a green "✅ 已应用" state in real time.
+    """
+    payload = await _read_json_body(request)
+    applied_version = (payload.get("applied_version") or "").strip() or None
+    files_written = payload.get("files_written") or []
+    if not isinstance(files_written, list):
+        files_written = []
+
+    push_state = DatabaseService.get_project_push_state(project_id)
+    target = applied_version or push_state.get("pending_push_version") or push_state.get("policy_version")
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE projects
+            SET pending_push_version = NULL,
+                last_applied_at = ?,
+                last_applied_version = ?
+            WHERE id = ?
+            """,
+            (get_utc_now_iso(), target, project_id),
+        )
+        conn.commit()
+
+    new_state = DatabaseService.get_project_push_state(project_id)
+
+    await EventBus.broadcast("rule_applied", {
+        "project_id": project_id,
+        "applied_version": target,
+        "files_written": files_written,
+        "push_state": new_state,
+    })
+
+    return {
+        "success": True,
+        "project_id": project_id,
+        "applied_version": target,
+        "push_state": new_state,
+    }
+
+
+@app.post("/api/projects/{project_id}/cancel-push")
+async def cancel_push(project_id: str, request: Request):
+    """Clears the pending push flag without recording an application.
+
+    Called when the local developer answers 'n' to the prompt (or the prompt
+    times out). The policy version still lives on the server, but it is no
+    longer advertised as pending so it won't keep nagging at every commit.
+    """
+    _ = await _read_json_body(request)  # body is optional, accepted for forward-compat
+    state = DatabaseService.cancel_pending_push(project_id)
+    await EventBus.broadcast("rule_push_cancelled", {
+        "project_id": project_id,
+        "push_state": state,
+    })
+    return {"success": True, "project_id": project_id, "push_state": state}
+
+
+@app.put("/api/projects/{project_id}/push-enabled")
+async def set_push_enabled(project_id: str, request: Request):
+    """Toggles whether this project allows push notifications to local repos."""
+    payload = await _read_json_body(request)
+    enabled = bool(payload.get("enabled", True))
+    state = DatabaseService.set_push_enabled(project_id, enabled)
+    return {"success": True, "project_id": project_id, "push_state": state}
 
 
 @app.get("/api/projects/{project_id}/skills/export")
 async def export_project_skills(
     project_id: str,
-    format: str = "cursorrules",
+    format: str = "antigravity_skill",
     incremental: bool = False,
 ):
     """Exports synthesized skills and quality rules for IDE AI agents (Antigravity, Cursor, Claude, Copilot, Windsurf).

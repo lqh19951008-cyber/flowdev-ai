@@ -207,8 +207,8 @@ export function AddProjectModal(props?: AddProjectModalProps) {
   // 安装命令的常量计算（非 hooks，可置于早返回之后）
   const nodeInstallCmd = `node scripts/install-hook.js`;
   const platformCommands = {
-    powershell: `Invoke-WebRequest -Uri "${serverUrl}/scripts/flowdev-hook.js" -OutFile ".git\\hooks\\pre-commit" -UseBasicParsing`,
-    bash: `curl -s "${serverUrl}/scripts/flowdev-hook.js" -o .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit`,
+    powershell: `New-Item -ItemType Directory -Force -Path .git/hooks | Out-Null; Invoke-WebRequest -Uri "${serverUrl}/scripts/flowdev-hook.js" -OutFile ".git/hooks/pre-commit" -UseBasicParsing; node .git/hooks/pre-commit --status`,
+    bash: `mkdir -p .git/hooks && curl -fsSL "${serverUrl}/scripts/flowdev-hook.js" -o .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit && node .git/hooks/pre-commit --status`,
   };
   const installCmd = platformCommands[installShell];
 
@@ -752,6 +752,17 @@ export function AddProjectModal(props?: AddProjectModalProps) {
                 >
                   {copiedKey === "node" ? "已复制" : "复制此命令"}
                 </button>
+              </div>
+
+              {/* Verification & Test Guidance */}
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 text-[11px] text-slate-600 dark:text-slate-400 space-y-1.5">
+                <div className="font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                  <span className="text-blue-600 dark:text-blue-400">💡</span>
+                  <span>如何验证门禁已生效？</span>
+                </div>
+                <p className="leading-relaxed">
+                  在项目中暂存一个包含缺陷的文件（例如包含 <code className="px-1 py-0.5 rounded bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 font-mono">eval(&quot;1+1&quot;)</code> 或 <code className="px-1 py-0.5 rounded bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 font-mono">null.foo</code> 的 js/ts/py 文件），执行 <code className="px-1 py-0.5 rounded bg-slate-200 dark:bg-slate-800 font-mono text-slate-700 dark:text-slate-300">git commit</code> 即可看到 FlowDev 自动拦截提示。若暂存区仅有 txt/md 等非源码文件，门禁将自动快速放行。
+                </p>
               </div>
             </div>
 

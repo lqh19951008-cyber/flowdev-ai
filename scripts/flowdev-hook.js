@@ -1,4 +1,5 @@
-#!/usr/bin/env node
+#!/bin/sh
+// 2>/dev/null; exec node "$0" "$@"
 
 /**
  * FlowDev-AI Pre-Commit Git Hook & CLI Code Review Gatekeeper
@@ -306,6 +307,81 @@ function mergeWithMarker(filePath, newBlockContent, startMarker = "<!-- FLOWDEV_
   }
 }
 
+async function performSync(targetProject, gitRoot) {
+  /**
+   * Core sync routine shared by the manual `sync-skills` CLI and the
+   * auto-detected push-mode prompt. Returns a list of files that were created
+   * or updated so the caller can `git add` them and report back to the server.
+   *
+   * This function never `process.exit`s on its own; it returns the result and
+   * lets the caller decide what to do (commit, ack, etc.).
+   */
+  const filesWritten = [];
+
+  // 1. Antigravity Skill (.agents/skills/flowdev-quality/SKILL.md & .agent/skills/flowdev-quality/SKILL.md)
+  const agySkillContent = await fetchText(`${SERVER_URL}/api/projects/${encodeURIComponent(targetProject)}/skills/export?format=antigravity_skill`);
+  const agySkillDirs = [
+    path.join(gitRoot, ".agent", "skills", "flowdev-quality"),
+    path.join(gitRoot, ".agents", "skills", "flowdev-quality"),
+  ];
+  for (const dir of agySkillDirs) {
+    fs.mkdirSync(dir, { recursive: true });
+    const skillPath = path.join(dir, "SKILL.md");
+    fs.writeFileSync(skillPath, agySkillContent, "utf8");
+    filesWritten.push(skillPath);
+    console.log(`  ${c.green}✓ [模块化技能] Antigravity 技能库:${c.reset} ${skillPath}`);
+  }
+
+  // 2. Antigravity Project Rules (GEMINI.md & AGENTS.md & .agents/rules/flowdev-quality.md)
+  const agyRuleContent = await fetchText(`${SERVER_URL}/api/projects/${encodeURIComponent(targetProject)}/skills/export?format=gemini_md`);
+  const geminiPath = path.join(gitRoot, "GEMINI.md");
+  const agentsPath = path.join(gitRoot, "AGENTS.md");
+  const gMode = mergeWithMarker(geminiPath, agyRuleContent);
+  const aMode = mergeWithMarker(agentsPath, agyRuleContent);
+  filesWritten.push(geminiPath, agentsPath);
+  console.log(`  ${c.green}✓ [增量合并] Antigravity 规则文件:${c.reset} ${geminiPath} (${gMode})`);
+  console.log(`  ${c.green}✓ [增量合并] Antigravity 规则文件:${c.reset} ${agentsPath} (${aMode})`);
+
+  const agyRulesDir = path.join(gitRoot, ".agents", "rules");
+  fs.mkdirSync(agyRulesDir, { recursive: true });
+  const agyRulesFile = path.join(agyRulesDir, "flowdev-quality.md");
+  fs.writeFileSync(agyRulesFile, agyRuleContent, "utf8");
+  filesWritten.push(agyRulesFile);
+  console.log(`  ${c.green}✓ [独立规则] Antigravity 规则库:${c.reset} ${agyRulesFile}`);
+
+  // 3. Cursor (.cursorrules & .cursor/rules/flowdev-guards.mdc)
+  const cursorRulesContent = await fetchText(`${SERVER_URL}/api/projects/${encodeURIComponent(targetProject)}/skills/export?format=cursorrules`);
+  const cursorPath = path.join(gitRoot, ".cursorrules");
+  const cMode = mergeWithMarker(cursorPath, cursorRulesContent, "<!-- FLOWDEV_AI_RULES_START -->", "<!-- FLOWDEV_AI_RULES_END -->");
+  filesWritten.push(cursorPath);
+  console.log(`  ${c.green}✓ [增量合并] Cursor 规范文件:${c.reset} ${cursorPath} (${cMode})`);
+
+  // 4. Claude Code (CLAUDE.md)
+  const claudeContent = await fetchText(`${SERVER_URL}/api/projects/${encodeURIComponent(targetProject)}/skills/export?format=claude_md`);
+  const claudePath = path.join(gitRoot, "CLAUDE.md");
+  const clMode = mergeWithMarker(claudePath, claudeContent);
+  filesWritten.push(claudePath);
+  console.log(`  ${c.green}✓ [增量合并] Claude Code 指南:${c.reset} ${claudePath} (${clMode})`);
+
+  // 5. GitHub Copilot instructions if .github exists
+  const githubDir = path.join(gitRoot, ".github");
+  if (fs.existsSync(githubDir)) {
+    const copilotContent = await fetchText(`${SERVER_URL}/api/projects/${encodeURIComponent(targetProject)}/skills/export?format=copilot`);
+    const copilotPath = path.join(githubDir, "copilot-instructions.md");
+    const cpMode = mergeWithMarker(copilotPath, copilotContent);
+    filesWritten.push(copilotPath);
+    console.log(`  ${c.green}✓ [增量合并] Copilot 指令:${c.reset} ${copilotPath} (${cpMode})`);
+  }
+
+  // 6. Windsurf rules (.windsurfrules)
+  const windsurfPath = path.join(gitRoot, ".windsurfrules");
+  const wMode = mergeWithMarker(windsurfPath, cursorRulesContent, "<!-- FLOWDEV_AI_RULES_START -->", "<!-- FLOWDEV_AI_RULES_END -->");
+  filesWritten.push(windsurfPath);
+  console.log(`  ${c.green}✓ [增量合并] Windsurf 规范:${c.reset} ${windsurfPath} (${wMode})`);
+
+  return filesWritten;
+}
+
 async function syncSkills() {
   const { projectId } = getGitMetadata();
   const targetProject = process?.env?.FLOWDEV_PROJECT_ID || projectId || "rxjs";
@@ -317,60 +393,8 @@ async function syncSkills() {
   console.log(`${c.cyan}${c.bold}================================================================${c.reset}\n`);
 
   try {
-    // 1. Antigravity Skill (.agents/skills/flowdev-quality/SKILL.md & .agent/skills/flowdev-quality/SKILL.md)
-    const agySkillContent = await fetchText(`${SERVER_URL}/api/projects/${encodeURIComponent(targetProject)}/skills/export?format=antigravity_skill`);
-    const agySkillDirs = [
-      path.join(gitRoot, ".agent", "skills", "flowdev-quality"),
-      path.join(gitRoot, ".agents", "skills", "flowdev-quality"),
-    ];
-    for (const dir of agySkillDirs) {
-      fs.mkdirSync(dir, { recursive: true });
-      const skillPath = path.join(dir, "SKILL.md");
-      fs.writeFileSync(skillPath, agySkillContent, "utf8");
-      console.log(`  ${c.green}✓ [模块化技能] Antigravity 技能库:${c.reset} ${skillPath}`);
-    }
-
-    // 2. Antigravity Project Rules (GEMINI.md & AGENTS.md & .agents/rules/flowdev-quality.md)
-    const agyRuleContent = await fetchText(`${SERVER_URL}/api/projects/${encodeURIComponent(targetProject)}/skills/export?format=gemini_md`);
-    const geminiPath = path.join(gitRoot, "GEMINI.md");
-    const agentsPath = path.join(gitRoot, "AGENTS.md");
-    const gMode = mergeWithMarker(geminiPath, agyRuleContent);
-    const aMode = mergeWithMarker(agentsPath, agyRuleContent);
-    console.log(`  ${c.green}✓ [增量合并] Antigravity 规则文件:${c.reset} ${geminiPath} (${gMode})`);
-    console.log(`  ${c.green}✓ [增量合并] Antigravity 规则文件:${c.reset} ${agentsPath} (${aMode})`);
-
-    const agyRulesDir = path.join(gitRoot, ".agents", "rules");
-    fs.mkdirSync(agyRulesDir, { recursive: true });
-    fs.writeFileSync(path.join(agyRulesDir, "flowdev-quality.md"), agyRuleContent, "utf8");
-    console.log(`  ${c.green}✓ [独立规则] Antigravity 规则库:${c.reset} ${path.join(agyRulesDir, "flowdev-quality.md")}`);
-
-    // 3. Cursor (.cursorrules & .cursor/rules/flowdev-guards.mdc)
-    const cursorRulesContent = await fetchText(`${SERVER_URL}/api/projects/${encodeURIComponent(targetProject)}/skills/export?format=cursorrules`);
-    const cursorPath = path.join(gitRoot, ".cursorrules");
-    const cMode = mergeWithMarker(cursorPath, cursorRulesContent, "<!-- FLOWDEV_AI_RULES_START -->", "<!-- FLOWDEV_AI_RULES_END -->");
-    console.log(`  ${c.green}✓ [增量合并] Cursor 规范文件:${c.reset} ${cursorPath} (${cMode})`);
-
-    // 4. Claude Code (CLAUDE.md)
-    const claudeContent = await fetchText(`${SERVER_URL}/api/projects/${encodeURIComponent(targetProject)}/skills/export?format=claude_md`);
-    const claudePath = path.join(gitRoot, "CLAUDE.md");
-    const clMode = mergeWithMarker(claudePath, claudeContent);
-    console.log(`  ${c.green}✓ [增量合并] Claude Code 指南:${c.reset} ${claudePath} (${clMode})`);
-
-    // 5. GitHub Copilot instructions if .github exists
-    const githubDir = path.join(gitRoot, ".github");
-    if (fs.existsSync(githubDir)) {
-      const copilotContent = await fetchText(`${SERVER_URL}/api/projects/${encodeURIComponent(targetProject)}/skills/export?format=copilot`);
-      const copilotPath = path.join(githubDir, "copilot-instructions.md");
-      const cpMode = mergeWithMarker(copilotPath, copilotContent);
-      console.log(`  ${c.green}✓ [增量合并] Copilot 指令:${c.reset} ${copilotPath} (${cpMode})`);
-    }
-
-    // 6. Windsurf rules (.windsurfrules)
-    const windsurfPath = path.join(gitRoot, ".windsurfrules");
-    const wMode = mergeWithMarker(windsurfPath, cursorRulesContent, "<!-- FLOWDEV_AI_RULES_START -->", "<!-- FLOWDEV_AI_RULES_END -->");
-    console.log(`  ${c.green}✓ [增量合并] Windsurf 规范:${c.reset} ${windsurfPath} (${wMode})`);
-
-    console.log(`\n${c.green}${c.bold}✨ 增量同步完成！${c.reset}`);
+    const filesWritten = await performSync(targetProject, gitRoot);
+    console.log(`\n${c.green}${c.bold}✨ 增量同步完成！共更新 ${filesWritten.length} 个文件。${c.reset}`);
     console.log(`${c.dim}提示: 新旧 Skill 完美共存，既累加了最新防御规则，又完整保留了你原本手写的指令与配置。${c.reset}\n`);
     process.exit(0);
   } catch (err) {
@@ -391,6 +415,285 @@ function getGitMetadata() {
   } catch (e) {
     return { projectId: "default-project", branch: "main", committer: "developer" };
   }
+}
+
+// ===================== Push Mode helpers =====================
+function getFlowDevLocalDir() {
+  const gitRoot = getGitRoot();
+  // .git/flowdev/ is local-only metadata that never gets committed. We keep
+  // it under .git/ so it never leaks into git status and never gets indexed.
+  const dir = path.join(gitRoot, ".git", "flowdev");
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (e) {}
+  return dir;
+}
+
+function readLocalVersion() {
+  try {
+    const file = path.join(getFlowDevLocalDir(), ".local-version");
+    if (!fs.existsSync(file)) return "0.0.0";
+    return (fs.readFileSync(file, "utf8") || "0.0.0").trim() || "0.0.0";
+  } catch (e) {
+    return "0.0.0";
+  }
+}
+
+function writeLocalVersion(version) {
+  try {
+    const file = path.join(getFlowDevLocalDir(), ".local-version");
+    fs.writeFileSync(file, String(version || "0.0.0").trim(), "utf8");
+  } catch (e) {}
+}
+
+function compareSemver(a, b) {
+  const parse = (v) =>
+    String(v || "0.0.0")
+      .replace(/^v/i, "")
+      .split(".")
+      .map((n) => parseInt(n, 10) || 0);
+  const [a1, a2, a3] = parse(a);
+  const [b1, b2, b3] = parse(b);
+  if (a1 !== b1) return a1 - b1;
+  if (a2 !== b2) return a2 - b2;
+  return a3 - b3;
+}
+
+async function fetchSyncStatus(targetProject, localVersion) {
+  const url = `${SERVER_URL}/api/projects/${encodeURIComponent(targetProject)}/sync-status?local_version=${encodeURIComponent(localVersion || "0.0.0")}`;
+  return await fetchJson(url);
+}
+
+async function fetchJson(urlStr) {
+  const text = await fetchText(urlStr);
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    throw new Error(`无法解析后端返回的 JSON: ${text?.slice(0, 200) ?? "(empty)"}`);
+  }
+}
+
+async function postJsonRaw(urlStr, body) {
+  return await postJson(urlStr, "", body);
+}
+
+function promptYesNo(question, defaultYes = true, timeoutMs = 12000) {
+  return new Promise((resolve) => {
+    const suffix = defaultYes ? " [Y/n]" : " [y/N]";
+    if (!process?.stdin?.isTTY || !process?.stdout?.isTTY) {
+      // Non-TTY (VS Code GUI commit, CI, etc.): silently adopt the default
+      // so we never block the user. Surface a one-line hint so they can opt
+      // in manually next time if needed.
+      console.log(`${c.dim}[FlowDev-Push] ${question}${suffix} ${c.reset}${c.yellow}→ (non-TTY, 默认 ${defaultYes ? "Y" : "N"})${c.reset}`);
+      resolve(defaultYes);
+      return;
+    }
+
+    process.stdout.write(`${c.bold}${c.cyan}? ${question}${c.reset}${suffix} `);
+
+    let answered = false;
+    const finish = (val) => {
+      if (answered) return;
+      answered = true;
+      try {
+        process.stdin.removeAllListeners("data");
+        process.stdin.removeAllListeners("error");
+        process.stdin.pause();
+      } catch (e) {}
+      resolve(val);
+    };
+
+    const onData = (chunk) => {
+      const s = chunk?.toString?.() ?? "";
+      const first = s.trim().toLowerCase().charAt(0);
+      if (first === "y") {
+        process.stdout.write("\n");
+        finish(true);
+      } else if (first === "n") {
+        process.stdout.write("\n");
+        finish(false);
+      } else if (s.includes("\n") || s.includes("\r")) {
+        // Enter pressed without input -> adopt default
+        process.stdout.write("\n");
+        finish(defaultYes);
+      }
+    };
+
+    try {
+      process.stdin.resume();
+      process.stdin.setEncoding("utf8");
+      process.stdin.on("data", onData);
+      process.stdin.on("error", () => finish(defaultYes));
+    } catch (e) {
+      finish(defaultYes);
+      return;
+    }
+
+    setTimeout(() => {
+      if (answered) return;
+      process.stdout.write(`${c.dim} (超时默认 ${defaultYes ? "Y" : "N"})${c.reset}\n`);
+      finish(defaultYes);
+    }, timeoutMs);
+  });
+}
+
+async function ackPushToServer(targetProject, appliedVersion, filesWritten) {
+  try {
+    await postJson(
+      SERVER_URL,
+      `/api/projects/${encodeURIComponent(targetProject)}/ack-push`,
+      {
+        applied_version: appliedVersion,
+        files_written: (filesWritten || []).map((f) => path.relative(getGitRoot(), f).replace(/\\/g, "/")),
+      }
+    );
+  } catch (e) {
+    console.warn(`${c.yellow}[FlowDev-Push] ack-push 回调失败：${e?.message ?? e}${c.reset}`);
+  }
+}
+
+async function cancelPushOnServer(targetProject) {
+  try {
+    await postJson(SERVER_URL, `/api/projects/${encodeURIComponent(targetProject)}/cancel-push`, {});
+  } catch (e) {
+    // Best-effort, never fatal.
+  }
+}
+
+function stageFiles(filesWritten) {
+  if (!filesWritten || filesWritten.length === 0) return;
+  // Filter to only files that exist and are inside the git root (path-boundary safety)
+  const gitRoot = getGitRoot();
+  const relFiles = filesWritten
+    .filter((f) => typeof f === "string" && f.length > 0)
+    .map((f) => {
+      try {
+        const abs = path.resolve(f);
+        if (!abs.startsWith(gitRoot)) return null;
+        const rel = path.relative(gitRoot, abs).replace(/\\/g, "/");
+        return fs.existsSync(abs) ? rel : null;
+      } catch (e) {
+        return null;
+      }
+    })
+    .filter(Boolean);
+
+  if (relFiles.length === 0) return;
+  try {
+    execFileSync("git", ["add", "--", ...relFiles], {
+      cwd: gitRoot,
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+  } catch (e) {
+    // If a user has not opted into auto-stage, surface a hint instead.
+    console.warn(`${c.yellow}[FlowDev-Push] 自动 git add 失败：${e?.message ?? e}${c.reset}`);
+    console.warn(`${c.dim}请手动执行: git add ${relFiles.join(" ")}${c.reset}`);
+  }
+}
+
+async function checkAndPromptPush(targetProject, gitRoot) {
+  /**
+   * Push Mode entry point. Calls GET /sync-status; if the server reports a
+   * pending_push_version that the local repo hasn't applied yet, asks the
+   * developer a one-key Y/n confirmation, then performs the sync, stages the
+   * newly written files, and posts an ack back to the server.
+   *
+   * Returns the list of files written (caller may use them to git-add).
+   */
+  const localVersion = readLocalVersion();
+  let status;
+  try {
+    status = await fetchSyncStatus(targetProject, localVersion);
+  } catch (e) {
+    if (process?.env?.FLOWDEV_PUSH_DEBUG === "1") {
+      console.warn(`${c.dim}[FlowDev-Push] sync-status 查询失败：${e?.message ?? e}${c.reset}`);
+    }
+    return [];
+  }
+
+  if (process?.env?.FLOWDEV_PUSH_DEBUG === "1") {
+    console.warn(`${c.dim}[FlowDev-Push] DEBUG pending=${status?.pending} pending_version=${status?.pending_push_version} local=${localVersion}${c.reset}`);
+  }
+  if (!status || !status.pending || !status.pending_push_version) {
+    return [];
+  }
+
+  if (status.push_enabled === false) {
+    return [];
+  }
+
+  const pendingVersion = status.pending_push_version;
+  const latestVersion = status.latest_version || pendingVersion;
+  if (compareSemver(pendingVersion, localVersion) <= 0) {
+    // Already applied locally, just clear the flag.
+    writeLocalVersion(pendingVersion);
+    await ackPushToServer(targetProject, pendingVersion, []);
+    return [];
+  }
+
+  const changelog = Array.isArray(status.changelog) ? status.changelog : [];
+  const changeReasons = changelog
+    .map((entry) => entry?.reason)
+    .filter(Boolean)
+    .slice(0, 5);
+
+  console.log("");
+  console.log(`${c.cyan}${c.bold}================================================================${c.reset}`);
+  console.log(`${c.cyan}${c.bold} 📤 [FlowDev-Push] 检测到服务端有新的规则待推送到本地${c.reset}`);
+  console.log(`${c.cyan}${c.bold}================================================================${c.reset}`);
+  console.log(`  ${c.dim}本地版本:${c.reset} ${c.yellow}v${localVersion}${c.reset}`);
+  console.log(`  ${c.dim}最新版本:${c.reset} ${c.green}${c.bold}v${latestVersion}${c.reset}  ${c.dim}(待推送 ${c.reset}${c.cyan}v${pendingVersion}${c.reset}${c.dim})${c.reset}`);
+  if (changeReasons.length > 0) {
+    console.log(`  ${c.dim}变更摘要:${c.reset}`);
+    for (const r of changeReasons) {
+      console.log(`    ${c.cyan}→${c.reset} ${r}`);
+    }
+  }
+  console.log(`${c.cyan}${c.bold}================================================================${c.reset}`);
+
+  const answer = await promptYesNo(
+    `是否立即将 v${latestVersion} 同步到本地仓库（自动写入 AGENTS.md / .cursorrules / SKILL.md 并随本次 commit 入库）？`,
+    true,
+    15000
+  );
+
+  if (!answer) {
+    console.log(`${c.yellow}[FlowDev-Push] 已跳过本次推送。规则不会写入本地仓库，本次 commit 正常继续。${c.reset}`);
+    await cancelPushOnServer(targetProject);
+    return [];
+  }
+
+  console.log(`${c.green}[FlowDev-Push] 用户已确认，开始写入文件...${c.reset}`);
+  let filesWritten;
+  try {
+    filesWritten = await performSync(targetProject, gitRoot);
+  } catch (e) {
+    console.error(`${c.red}[FlowDev-Push] 写入文件失败：${e?.message ?? e}${c.reset}`);
+    // Do NOT cancel on error: the pending push is still valid and may succeed
+    // on the next commit. Just bail out for this commit.
+    return [];
+  }
+
+  writeLocalVersion(latestVersion);
+  stageFiles(filesWritten);
+  await ackPushToServer(targetProject, latestVersion, filesWritten);
+
+  console.log("");
+  console.log(`${c.green}${c.bold}✨ Push Mode 同步完成！${c.reset}${c.dim}已自动 git add ${filesWritten.length} 个新规则文件，可随本次 commit 一起入库。${c.reset}`);
+  return filesWritten;
+}
+
+async function runPushCheckCli() {
+  const { projectId } = getGitMetadata();
+  const targetProject = process?.env?.FLOWDEV_PROJECT_ID || projectId || "rxjs";
+  const gitRoot = getGitRoot();
+
+  console.log(`${c.cyan}${c.bold} [FlowDev-Push] 手动检查是否有新规则待推送...${c.reset}`);
+  const filesWritten = await checkAndPromptPush(targetProject, gitRoot);
+  if (!filesWritten || filesWritten.length === 0) {
+    console.log(`${c.green}[FlowDev-Push] 本地与服务端已同步，无需处理。${c.reset}`);
+  }
+  process.exit(0);
 }
 
 function handleCliCommands() {
@@ -461,10 +764,11 @@ function handleCliCommands() {
     console.log(`本地模式: ${mode === "warn" ? c.yellow + "仅提示不阻断 (Warn Only)" : c.red + "严格阻断 (Block)"}${c.reset}`);
     console.log(`门禁中台: ${SERVER_URL}`);
     console.log(`\n快捷管理指令:`);
-    console.log(`  node .git/hooks/pre-commit --warn    (推荐开发期：仅提示，不卡提交)`);
-    console.log(`  node .git/hooks/pre-commit --disable (完全关闭门禁)`);
-    console.log(`  node .git/hooks/pre-commit --enable  (恢复严格门禁)`);
-    console.log(`  git commit -m "..." --no-verify     (原生单次跳过)\n`);
+    console.log(`  node .git/hooks/pre-commit --warn        (推荐开发期：仅提示，不卡提交)`);
+    console.log(`  node .git/hooks/pre-commit --disable     (完全关闭门禁)`);
+    console.log(`  node .git/hooks/pre-commit --enable      (恢复严格门禁)`);
+    console.log(`  node .git/hooks/pre-commit --push-check  (检查后端是否有新规则待推送，并提示确认同步)`);
+    console.log(`  git commit -m "..." --no-verify         (原生单次跳过)\n`);
     process.exit(0);
   }
 }
@@ -487,10 +791,43 @@ async function main() {
     process.exit(0);
   }
 
+  // ============== Push Mode: pre-flight pending-push check ==============
+  // Asks the server whether a newer rule set is staged and awaiting local
+  // confirmation. Runs before the staged-files gate so the user gets the
+  // prompt first, then continues with the regular commit flow.
+  const gitRoot = getGitRoot();
+  try {
+    const envPushOff =
+      process?.env?.FLOWDEV_DISABLE_PUSH === "1" || process?.env?.FLOWDEV_SKIP_PUSH === "1";
+    const localPushOff = safeGitExec(["config", "--get", "flowdev.push_enabled"], "").toLowerCase();
+    const pushEnabled =
+      !envPushOff && localPushOff !== "false" && localPushOff !== "0" && localPushOff !== "off";
+    if (pushEnabled) {
+      await checkAndPromptPush(projectId, gitRoot);
+    }
+  } catch (e) {
+    if (process?.env?.FLOWDEV_PUSH_DEBUG === "1") {
+      console.warn(`${c.dim}[FlowDev-Push] 检查异常跳过：${e?.message ?? e}${c.reset}`);
+    }
+  }
+
   const stagedFiles = getStagedCodeFiles();
 
-  // If no code changes in staged index, quietly allow commit
+  // If no code changes in staged index, allow commit with helpful feedback
   if (!stagedFiles || stagedFiles.length === 0) {
+    const allStaged = safeGitExec(["diff", "--cached", "--name-only"], "");
+    if (allStaged && allStaged.trim().length > 0) {
+      console.log(
+        `${c.dim}[FlowDev-AI 门禁] 暂存区均为文档或配置等非核心源码文件，已自动放行提交。${c.reset}`
+      );
+    } else if (process?.stdout?.isTTY) {
+      console.log(
+        `\n${c.cyan}[FlowDev-AI 门禁就绪]${c.reset} 钩子探针正常运行中，当前暂存区无待审查代码。`
+      );
+      console.log(
+        `${c.dim}提示: 在项目中修改代码并通过 'git add <文件>' 暂存后，执行 'git commit' 即可自动触发 AI 质量门禁。${c.reset}\n`
+      );
+    }
     process.exit(0);
   }
 
@@ -640,6 +977,11 @@ handleCliCommands();
 if (process.argv.includes("--sync-skills") || process.argv.includes("-s") || process.argv.includes("sync")) {
   syncSkills().catch((err) => {
     console.error("同步 Agent Skills 失败:", err?.message ?? err);
+    process.exit(1);
+  });
+} else if (process.argv.includes("--push-check") || process.argv.includes("push-check")) {
+  runPushCheckCli().catch((err) => {
+    console.error("[FlowDev-Push] 推送检查失败:", err?.message ?? err);
     process.exit(1);
   });
 } else {

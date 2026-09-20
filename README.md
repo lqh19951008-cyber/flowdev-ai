@@ -228,6 +228,35 @@ pnpm run install-to "D:/projects/my-other-project"
   node "C:/Users/Administrator/.gemini/antigravity/scratch/flowdev-ai/scripts/flowdev-hook.js"
   ```
 
+### 姿势 A+：Push 模式 — 规则更新后主动推送到本地仓库（只需用户一次确认）
+除了手动运行 `node .git/hooks/pre-commit --sync-skills` 这种 Pull 模式外，FlowDev-AI 还支持 **服务端推送 → 本地一键确认**的闭环：
+
+1. 守门员在 Web 控制台修改 / 新增防御规则后，点击 `📤 推送至本地仓库`按钮；
+2. 后端在数据库中标记 `pending_push_version = vX.Y.Z` 并通过 SSE 广播 `rule_pushed` 事件；
+3. 本地开发者下次执行 `git commit` 时，钩子会自动检测到该标记并打印：
+   ```
+   ====================================================================
+    📤 [FlowDev-Push] 检测到服务端有新的规则待推送到本地
+   ====================================================================
+     本地版本: v0.0.0
+     最新版本: v0.0.1  (待推送 v0.0.1)
+     变更摘要:
+       → 新增 react-ts-null-safety 防御规范
+   ====================================================================
+   ? 是否立即将 v0.0.1 同步到本地仓库？ [Y/n]
+   ```
+4. 按 `Y` （默认）后自动写入 AGENTS.md / .cursorrules / CLAUDE.md / SKILL.md 等 8 个规则文件并 `git add`，随本次 commit 一起入库；
+5. 提交后 webhook 调 `POST /ack-push` 回调服务端，前端实时变为“✅ 已应用 v0.0.1”。
+
+如果选择 `n`（或 VS Code GUI 的 non-TTY 默认采用上次选择），会调用 `POST /cancel-push` 清除推送标记，不会重复打扰。
+
+如果临时不想被打扰：
+```bash
+node .git/hooks/pre-commit --push-check  # 手动查询与确认
+export FLOWDEV_DISABLE_PUSH=1            # 临时全局跳过推送检查
+git config flowdev.push_enabled false    # 本仓库关闭推送模式
+```
+
 ### 姿势 B：在 Web 画布中审查外部项目并一键应用补丁
 1. 打开 FlowDev-AI 工作台 (`http://localhost:3000`)；
 2. 在左侧 `CodeInputNode` 中将语言切换为目标代码语言，粘贴您外部项目的核心模块代码或 Git Diff；

@@ -34,6 +34,30 @@ def mask_key(k: str) -> str:
     return "********"
 
 
+def _bump_semver(current: str) -> str:
+    """Increments a simple semver MAJOR.MINOR.PATCH string by 1 on the PATCH field.
+
+    Examples:
+        1.2.3  -> 1.2.4
+        v0.0.0 -> 0.0.1
+        empty  -> 0.0.1
+    Falls back to "0.0.1" if parsing fails.
+    """
+    raw = (current or "").strip().lstrip("v")
+    if not raw:
+        return "0.0.1"
+    parts = raw.split(".")
+    while len(parts) < 3:
+        parts.append("0")
+    try:
+        major = int(parts[0])
+        minor = int(parts[1])
+        patch = int(parts[2]) + 1
+    except (ValueError, TypeError):
+        return "0.0.1"
+    return f"{major}.{minor}.{patch}"
+
+
 def get_utc_now_iso() -> str:
     """Returns current UTC time in ISO-8601 format with Z timezone indicator."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -73,6 +97,29 @@ def init_db() -> None:
             )
             """
         )
+
+        # ----- Schema migration: add push-related version columns if missing -----
+        # SQLite does not support IF NOT EXISTS for ADD COLUMN, so we introspect
+        # the table schema first and only alter when needed. This is idempotent
+        # and safe to run on every boot.
+        cursor.execute("PRAGMA table_info(projects)")
+        existing_cols = {row["name"] for row in cursor.fetchall()}
+
+        def _safe_add_column(col_name: str, col_ddl: str) -> None:
+            if col_name not in existing_cols:
+                try:
+                    cursor.execute(f"ALTER TABLE projects ADD COLUMN {col_ddl}")
+                except Exception:
+                    # Best-effort migration; never break startup.
+                    pass
+
+        _safe_add_column("policy_version", "policy_version TEXT DEFAULT '0.0.0'")
+        _safe_add_column("pending_push_version", "pending_push_version TEXT DEFAULT NULL")
+        _safe_add_column("push_enabled", "push_enabled INTEGER DEFAULT 1")
+        _safe_add_column("last_pushed_at", "last_pushed_at TEXT DEFAULT NULL")
+        _safe_add_column("last_applied_at", "last_applied_at TEXT DEFAULT NULL")
+        _safe_add_column("last_applied_version", "last_applied_version TEXT DEFAULT '0.0.0'")
+        _safe_add_column("last_pushed_changelog", "last_pushed_changelog TEXT DEFAULT NULL")
 
         # Scan Events Table
         cursor.execute(
@@ -385,7 +432,7 @@ class DatabaseService:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                UPDATE projects 
+                UPDATE projects
                 SET policy_dag_json = ?, updated_at = ?
                 WHERE id = ?
                 """,
@@ -393,6 +440,192 @@ class DatabaseService:
             )
             conn.commit()
             return cursor.rowcount > 0
+
+    # ---------------- Policy version & push state ----------------
+    @classmethod
+    def get_project_push_state(cls, project_id: str) -> Dict[str, Any]:
+        """Returns the policy version, pending push version and related metadata.
+
+        Used by both the Web control panel and the local Git hook to negotiate
+        whether a new rule set has been staged server-side and is waiting for
+        the developer to confirm application in the next commit.
+        """
+        cls.get_or_create_project(project_id)
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT policy_version, pending_push_version, push_enabled,
+                       last_pushed_at, last_applied_at, last_applied_version,
+                       last_pushed_changelog
+                FROM projects WHERE id = ?
+                """,
+                (project_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return cls._empty_push_state()
+            keys = ("policy_version", "pending_push_version", "push_enabled",
+                    "last_pushed_at", "last_applied_at", "last_applied_version",
+                    "last_pushed_changelog")
+            data = dict(zip(keys, row))
+            changelog_raw = data.get("last_pushed_changelog") or "[]"
+            try:
+                changelog = json.loads(changelog_raw)
+            except Exception:
+                changelog = []
+            return {
+                "policy_version": data.get("policy_version") or "0.0.0",
+                "pending_push_version": data.get("pending_push_version"),
+                "push_enabled": bool(data.get("push_enabled", 1)),
+                "last_pushed_at": normalize_iso_timestamp(data.get("last_pushed_at")),
+                "last_applied_at": normalize_iso_timestamp(data.get("last_applied_at")),
+                "last_applied_version": data.get("last_applied_version") or "0.0.0",
+                "changelog": changelog,
+                "pending": bool(data.get("pending_push_version")),
+            }
+
+    @staticmethod
+    def _empty_push_state() -> Dict[str, Any]:
+        return {
+            "policy_version": "0.0.0",
+            "pending_push_version": None,
+            "push_enabled": True,
+            "last_pushed_at": None,
+            "last_applied_at": None,
+            "last_applied_version": "0.0.0",
+            "changelog": [],
+            "pending": False,
+        }
+
+    @classmethod
+    def bump_policy_version(cls, project_id: str, reason: str = "") -> str:
+        """Atomically bumps policy_version (semver patch++) and returns the new version.
+
+        Also stamps `updated_at`. Does NOT auto-mark pending push; callers that
+        want a push to be triggered should call `mark_pending_push` separately.
+        """
+        cls.get_or_create_project(project_id)
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT policy_version FROM projects WHERE id = ?",
+                (project_id,),
+            )
+            row = cursor.fetchone()
+            current = (row[0] if row and row[0] else "0.0.0") or "0.0.0"
+            new_version = _bump_semver(current)
+            now = get_utc_now_iso()
+            cursor.execute(
+                """
+                UPDATE projects
+                SET policy_version = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (new_version, now, project_id),
+            )
+            conn.commit()
+            return new_version
+
+    @classmethod
+    def mark_pending_push(
+        cls,
+        project_id: str,
+        changelog: Optional[List[Dict[str, Any]]] = None,
+        version: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Marks the current policy_version as awaiting local application.
+
+        Called when the Web control panel clicks "Push to local repos" or when
+        a server-side rule change should proactively reach local developers.
+        Stores a structured changelog so the hook can render a friendly prompt.
+        """
+        cls.get_or_create_project(project_id)
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT policy_version FROM projects WHERE id = ?",
+                (project_id,),
+            )
+            row = cursor.fetchone()
+            current_version = (row[0] if row and row[0] else "0.0.0") or "0.0.0"
+            target_version = version or current_version
+            now = get_utc_now_iso()
+            cursor.execute(
+                """
+                UPDATE projects
+                SET pending_push_version = ?,
+                    last_pushed_at = ?,
+                    last_pushed_changelog = ?
+                WHERE id = ?
+                """,
+                (
+                    target_version,
+                    now,
+                    json.dumps(changelog or [], ensure_ascii=False),
+                    project_id,
+                ),
+            )
+            conn.commit()
+            return cls.get_project_push_state(project_id)
+
+    @classmethod
+    def consume_pending_push(cls, project_id: str) -> Dict[str, Any]:
+        """Clears the pending flag and stamps last_applied_* after the hook writes files.
+
+        Returns the updated push state. If no pending push existed, returns the
+        current state unchanged (no-op).
+        """
+        cls.get_or_create_project(project_id)
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT pending_push_version FROM projects WHERE id = ?",
+                (project_id,),
+            )
+            row = cursor.fetchone()
+            pending = row[0] if row else None
+            if not pending:
+                return cls.get_project_push_state(project_id)
+            now = get_utc_now_iso()
+            cursor.execute(
+                """
+                UPDATE projects
+                SET pending_push_version = NULL,
+                    last_applied_at = ?,
+                    last_applied_version = ?
+                WHERE id = ?
+                """,
+                (now, pending, project_id),
+            )
+            conn.commit()
+            return cls.get_project_push_state(project_id)
+
+    @classmethod
+    def cancel_pending_push(cls, project_id: str) -> Dict[str, Any]:
+        """Clears the pending flag without recording an application (e.g. user declined)."""
+        cls.get_or_create_project(project_id)
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE projects SET pending_push_version = NULL WHERE id = ?",
+                (project_id,),
+            )
+            conn.commit()
+            return cls.get_project_push_state(project_id)
+
+    @classmethod
+    def set_push_enabled(cls, project_id: str, enabled: bool) -> Dict[str, Any]:
+        """Toggles whether the server is allowed to stage pushes for this project."""
+        cls.get_or_create_project(project_id)
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE projects SET push_enabled = ? WHERE id = ?",
+                (1 if enabled else 0, project_id),
+            )
+            conn.commit()
+            return cls.get_project_push_state(project_id)
 
     @classmethod
     def record_scan_event(

@@ -107,8 +107,11 @@ export function QualityDashboardView() {
   };
 
   const handleOpenRuleLibrary = () => {
-    setRuleModalEvent(null);
-    setIsRuleModalOpen(true);
+    const targetProj =
+      selectedProjectId && selectedProjectId !== "all"
+        ? selectedProjectId
+        : (projects?.[0]?.id ?? "rxjs");
+    router?.push?.(`/skills?project=${encodeURIComponent(targetProj)}`);
   };
 
   const handleDragStart = (e: React.DragEvent, projId: string) => {
