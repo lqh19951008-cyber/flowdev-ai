@@ -44,3 +44,9 @@ function calculateBonus(salary) {
 }
 
 module.exports = { pay, calculateBonus };
+      // optimize with optional chaining
+      const safeBalance = user?.wallet?.balance ?? 0;
+// second commit
+// third commit
+// third commit
+// new code

@@ -47,6 +47,23 @@ class CliScanResponse(BaseModel):
     file_results: Optional[List[Dict[str, Any]]] = None
 
 
+class CliApplySuggestionsRequest(BaseModel):
+    project_id: str
+    file_path: str
+    original_content: str
+    suggestions: List[str]
+    language: str = "auto"
+    file_hash: Optional[str] = ""
+
+
+class CliApplySuggestionsResponse(BaseModel):
+    modified_content: str
+    applied_suggestions: List[str] = []
+    skipped_suggestions: List[str] = []
+    diff_summary: str = ""
+    file_path: str
+
+
 def detect_language(filename: str) -> str:
     """Infers programming language from file extension."""
     lower = filename.lower()
@@ -398,6 +415,145 @@ class CliScanner:
             event_id=event_id,
             file_results=file_results,
         )
+
+    @staticmethod
+    async def apply_suggestions(
+        project_id: str,
+        file_path: str,
+        original_content: str,
+        suggestions: List[str],
+        language: str = "auto",
+    ) -> CliApplySuggestionsResponse:
+        """Use AI to apply the given suggestions to a single file and return
+        the full modified content. Hook downloads the new content and writes
+        it back to disk before staging for commit. This is the engine behind
+        the "AI 自动改代码" UX — users press Y, the file is rewritten.
+        """
+        if not suggestions:
+            return CliApplySuggestionsResponse(
+                modified_content=original_content,
+                applied_suggestions=[],
+                skipped_suggestions=[],
+                diff_summary="no suggestions to apply",
+                file_path=file_path,
+            )
+
+        # Resolve language hint
+        if language == "auto":
+            language = detect_language(file_path)
+
+        # Load the project gate policy for any per-project directives
+        from database import DatabaseService  # local import avoids cycles
+        gate_policy = CliScanner._load_gate_policy(project_id)
+
+        # Build the AI prompt
+        system_prompt = (
+            "你是一位资深的代码重构专家。你的任务是根据 AI 审查给出的建议，"
+            "修改用户提供的源代码文件，让它变得更好。\n\n"
+            "规则:\n"
+            "  1. 必须保留文件原有的架构、import、类型定义、函数签名\n"
+            "  2. 只针对建议列表中提到的问题进行修改\n"
+            "  3. 保持代码风格一致 (缩进、引号、注释语言)\n"
+            "  4. 不要新增不在建议范围内的功能\n"
+            "  5. 如果某个建议与文件上下文冲突, 可以跳过并在末尾的 skipped 列表中说明原因\n"
+            "  6. 必须返回完整文件内容 (包括所有未修改的部分)\n\n"
+            "输出格式 (严格 JSON, 不要任何额外文字):\n"
+            "{\n"
+            '  "modified_content": "完整文件内容",\n'
+            '  "applied_suggestions": ["应用了哪些建议..."],\n'
+            '  "skipped_suggestions": [{"suggestion": "...", "reason": "..."}],\n'
+            '  "diff_summary": "一句中文总结改了什么"\n'
+            "}"
+        )
+
+        suggestions_text = "\n".join(f"- {s}" for s in suggestions)
+        user_prompt = (
+            f"项目: {project_id}\n"
+            f"文件路径: {file_path}\n"
+            f"语言: {language}\n"
+            f"门禁策略: {gate_policy}\n\n"
+            f"建议列表:\n{suggestions_text}\n\n"
+            f"--- 原始文件内容 ({file_path}) ---\n"
+            f"```\n{original_content}\n```\n\n"
+            "请返回 JSON 格式的修改结果:"
+        )
+
+        try:
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+            chunks: List[str] = []
+            async for token in LLMService.stream_chat(messages, temperature=0.2):
+                chunks.append(token)
+            text = "".join(chunks).strip()
+        except Exception as e:
+            logger.warning(f"apply_suggestions LLM call failed: {e}")
+            return CliApplySuggestionsResponse(
+                modified_content=original_content,
+                applied_suggestions=[],
+                skipped_suggestions=[s for s in suggestions],
+                diff_summary=f"LLM 调用失败: {e}",
+                file_path=file_path,
+            )
+
+        # Robust JSON extraction: handle ```json fences and prose around it
+        import json
+        import re
+        text_clean = text.strip()
+        m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text_clean, re.DOTALL)
+        if m:
+            text_clean = m.group(1)
+        else:
+            # Try to find first { to last }
+            i = text_clean.find("{")
+            j = text_clean.rfind("}")
+            if i != -1 and j > i:
+                text_clean = text_clean[i : j + 1]
+
+        try:
+            parsed = json.loads(text_clean)
+        except Exception:
+            logger.warning(f"apply_suggestions JSON parse failed: {text_clean[:200]}")
+            return CliApplySuggestionsResponse(
+                modified_content=original_content,
+                applied_suggestions=[],
+                skipped_suggestions=[s for s in suggestions],
+                diff_summary="AI 返回的内容无法解析为 JSON，未修改文件",
+                file_path=file_path,
+            )
+
+        modified = parsed.get("modified_content", original_content)
+        if not isinstance(modified, str) or not modified.strip():
+            modified = original_content
+        applied = parsed.get("applied_suggestions", []) or []
+        skipped_raw = parsed.get("skipped_suggestions", []) or []
+        if isinstance(skipped_raw, list) and skipped_raw and isinstance(skipped_raw[0], dict):
+            skipped = [f"{x.get('suggestion', '?')}: {x.get('reason', '')}" for x in skipped_raw]
+        else:
+            skipped = [str(x) for x in skipped_raw]
+        diff_summary = parsed.get("diff_summary", "")
+
+        return CliApplySuggestionsResponse(
+            modified_content=modified,
+            applied_suggestions=[str(x) for x in applied],
+            skipped_suggestions=skipped,
+            diff_summary=str(diff_summary),
+            file_path=file_path,
+        )
+
+    @staticmethod
+    def _load_gate_policy(project_id: str) -> str:
+        """Fetch project-level gate policy summary for the apply prompt."""
+        try:
+            from database import DatabaseService
+            proj = DatabaseService.get_project(project_id) or {}
+            return json.dumps({
+                "mode": proj.get("gate_mode", "block"),
+                "scope": proj.get("scope", "internal"),
+            }, ensure_ascii=False)
+        except Exception:
+            return "block / internal"
 
     @classmethod
     def _static_rules_check(

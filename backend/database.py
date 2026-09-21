@@ -425,6 +425,136 @@ class DatabaseService:
             return {}
 
     @classmethod
+    def list_projects_health_matrix(cls, days: int = 7) -> List[Dict[str, Any]]:
+        """Aggregated health snapshot per project over the last `days` days.
+
+        Powers the gatekeeper's multi-project health matrix view. Each row
+        is designed to be (a) glanceable for at-a-glance triage, and
+        (b) directly selectable for cross-project rule synthesis.
+
+        Fields:
+          - id, name, description, failure_action, push_enabled
+          - latest_version, last_applied_version, pending_push_version
+          - total_events_7d, critical_events_7d, pass_rate_7d
+          - last_scan_at, last_critical_at
+          - top_files_7d: most-frequent critical files
+          - top_issues_7d: most-frequent critical issue patterns
+          - recent_event_ids: event ids the gatekeeper can drill into
+        """
+        from datetime import datetime, timezone, timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT p.id, p.name, p.description, p.policy_dag_json,
+                       p.policy_version, p.last_applied_version,
+                       p.pending_push_version, p.push_enabled,
+                       p.last_pushed_at, p.last_applied_at, p.updated_at
+                FROM projects p
+                ORDER BY p.updated_at DESC
+                """
+            )
+            projects = cursor.fetchall()
+
+            results: List[Dict[str, Any]] = []
+            for prow in projects:
+                pid = prow["id"]
+                # Aggregate scan_events in the window
+                cursor.execute(
+                    """
+                    SELECT id, passed, critical_issues_json, summary, created_at
+                    FROM scan_events
+                    WHERE project_id = ? AND created_at >= ?
+                    ORDER BY created_at DESC
+                    """,
+                    (pid, cutoff),
+                )
+                ev_rows = cursor.fetchall()
+                total_7d = len(ev_rows)
+                critical_7d = sum(1 for r in ev_rows if not r["passed"])
+                passed_7d = total_7d - critical_7d
+                pass_rate_7d = round((passed_7d / total_7d * 100), 1) if total_7d else 100.0
+                last_scan_at = ev_rows[0]["created_at"] if ev_rows else None
+                last_critical_at = next(
+                    (r["created_at"] for r in ev_rows if not r["passed"]),
+                    None,
+                )
+
+                # Aggregate critical issues to find patterns
+                file_counter: Dict[str, int] = {}
+                issue_counter: Dict[str, int] = {}
+                recent_event_ids: List[str] = []
+                for r in ev_rows:
+                    recent_event_ids.append(r["id"])
+                    if r["passed"]:
+                        continue
+                    try:
+                        issues = json.loads(r["critical_issues_json"] or "[]")
+                    except Exception:
+                        issues = []
+                    for iss in issues:
+                        iss_str = str(iss)
+                        # Extract file token if present
+                        import re
+                        m = re.match(r"^\s*\[([^\]]+)\]\s*(.*)", iss_str)
+                        if m:
+                            fname = m.group(1)
+                            file_counter[fname] = file_counter.get(fname, 0) + 1
+                            tail = m.group(2).strip()
+                            # Use a 50-char issue signature
+                            sig = (tail[:50] + "…") if len(tail) > 50 else tail
+                            issue_counter[sig] = issue_counter.get(sig, 0) + 1
+                        else:
+                            sig = (iss_str[:50] + "…") if len(iss_str) > 50 else iss_str
+                            issue_counter[sig] = issue_counter.get(sig, 0) + 1
+
+                top_files_7d = sorted(
+                    [{"file": k, "count": v} for k, v in file_counter.items()],
+                    key=lambda x: -x["count"],
+                )[:5]
+                top_issues_7d = sorted(
+                    [{"issue": k, "count": v} for k, v in issue_counter.items()],
+                    key=lambda x: -x["count"],
+                )[:8]
+
+                policy = json.loads(prow["policy_dag_json"] or "{}")
+                gate_enabled = policy.get("gate_enabled", True) if policy.get("enabled") is None else policy.get("enabled", True)
+                failure_action = policy.get("failure_action") or policy.get("failureAction") or "block_commit"
+                if not gate_enabled:
+                    failure_action = "disabled"
+
+                results.append({
+                    "id": pid,
+                    "name": prow["name"],
+                    "description": prow["description"],
+                    "policy_version": prow["policy_version"] or "0.0.0",
+                    "last_applied_version": prow["last_applied_version"] or "0.0.0",
+                    "pending_push_version": prow["pending_push_version"],
+                    "push_enabled": bool(prow["push_enabled"]),
+                    "failure_action": failure_action,
+                    "total_events_7d": total_7d,
+                    "critical_events_7d": critical_7d,
+                    "passed_events_7d": passed_7d,
+                    "pass_rate_7d": pass_rate_7d,
+                    "last_scan_at": last_scan_at,
+                    "last_critical_at": last_critical_at,
+                    "last_pushed_at": prow["last_pushed_at"],
+                    "last_applied_at": prow["last_applied_at"],
+                    "top_files_7d": top_files_7d,
+                    "top_issues_7d": top_issues_7d,
+                    "recent_event_ids": recent_event_ids[:50],
+                    "health_grade": (
+                        "A" if pass_rate_7d >= 95 and critical_7d == 0
+                        else "B" if pass_rate_7d >= 80 and critical_7d <= 5
+                        else "C" if pass_rate_7d >= 60
+                        else "D" if pass_rate_7d >= 40
+                        else "F"
+                    ),
+                })
+            return results
+
+    @classmethod
     def update_project_policy(cls, project_id: str, policy_dag: Dict[str, Any]) -> bool:
         """Updates the custom DAG review policy for a project."""
         now = get_utc_now_iso()

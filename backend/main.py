@@ -26,7 +26,7 @@ from typing import Optional, Literal, Dict, Any, List
 from pydantic import BaseModel, Field
 from fastapi import FastAPI, HTTPException, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, PlainTextResponse
+from fastapi.responses import StreamingResponse, PlainTextResponse, JSONResponse
 
 class CreateProjectRequest(BaseModel):
     id: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
@@ -41,7 +41,7 @@ from pathlib import Path
 from config import settings
 from scheduler import WorkflowPayload
 from executor import WorkflowExecutor
-from cli_scanner import CliScanRequest, CliScanResponse, CliScanner
+from cli_scanner import CliScanRequest, CliScanResponse, CliApplySuggestionsRequest, CliApplySuggestionsResponse, CliScanner
 
 from database import DatabaseService, get_utc_now_iso, get_connection
 from event_bus import EventBus
@@ -150,15 +150,254 @@ async def cli_scan(payload: CliScanRequest):
     )
 
 
+@app.post("/api/rules/refine")
+async def refine_rule_with_chat(request: Request):
+    """Conversational refinement endpoint.
+
+    The gatekeeper iterates on a previously synthesized rule by chatting
+    with the LLM in natural language ("make it more specific", "add a
+    Python example", "focus only on SQL injection"). Each call returns a
+    new rule draft, building on the previous one.
+
+    Request body:
+        {
+          "previous_rule": { title, summary, bad_snippet, good_snippet,
+                              skill_markdown, gate_rule, ... },
+          "messages": [
+            {"role": "user", "content": "请增加 Python 的例子"},
+            {"role": "assistant", "content": "好, 上轮结果..."},
+            ...
+          ],
+          "context": {
+            "project_ids": ["..."],
+            "events": [...],     // optional, used to re-anchor the prompt
+          }
+        }
+    """
+    try:
+        payload = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {e!s}")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Body must be JSON object")
+
+    previous_rule = payload.get("previous_rule") or {}
+    messages_in = payload.get("messages") or []
+    context = payload.get("context") or {}
+
+    if not isinstance(messages_in, list) or len(messages_in) == 0:
+        raise HTTPException(status_code=400, detail="'messages' must be a non-empty list")
+    if not previous_rule.get("title"):
+        raise HTTPException(status_code=400, detail="'previous_rule.title' required")
+
+    sys_prompt = (
+        "你是一名世界顶尖的软件架构师与 DevSecOps 质量工程专家。\n"
+        "守门员正与你就上一轮提炼出的规则进行对话迭代修改。\n"
+        "你的任务: 严格保留上一轮规则的核心意图, 同时精准响应用户最新一轮的修改要求, 生成一个**新版完整 JSON 草稿**。\n"
+        "要求:\n"
+        "  1. 必须直接输出严格合法的 JSON 代码块 (```json ... ```)\n"
+        "  2. 字段与上一轮完全一致, 不丢字段\n"
+        "  3. 用户可能要求:\n"
+        "     - 改换示例语言 (TypeScript → Python)\n"
+        "     - 调整粒度 (更宽松/更严苛)\n"
+        "     - 增加具体场景 (e.g. 仅限 SQL 注入)\n"
+        "     - 改述门禁卡点正则\n"
+        "     - 重写 skill_markdown 为别的格式\n"
+        "  4. 始终保留 bad_snippet / good_snippet / skill_markdown / gate_rule 四个字段\n"
+    )
+
+    history = [previous_rule.get("title")]
+    user_msg = messages_in[-1].get("content", "") if isinstance(messages_in[-1], dict) else ""
+    history.append(f"用户最新修改要求: {user_msg}")
+
+    user_prompt = (
+        f"上一轮规则 JSON:\n```json\n{json.dumps(previous_rule, ensure_ascii=False, indent=2)}\n```\n\n"
+        f"对话历史 (旧 → 新):\n"
+        + "\n".join(
+            f"  [{m.get('role', '?')}] {m.get('content', '')[:400]}"
+            for m in messages_in if isinstance(m, dict)
+        )
+        + "\n\n"
+        f"项目上下文 (可选): {json.dumps(context, ensure_ascii=False)[:800]}\n\n"
+        "请生成新版 JSON 草稿, 只输出 ```json ... ``` 代码块。"
+    )
+
+    messages = [
+        {"role": "system", "content": sys_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    if settings.has_api_key:
+        try:
+            chunks: List[str] = []
+            async for token in LLMService.stream_chat(messages, temperature=0.3):
+                chunks.append(token)
+            full_response = "".join(chunks)
+            data = extract_json_object(full_response)
+            if isinstance(data, dict) and "title" in data and "good_snippet" in data:
+                # Carry forward metadata that the model may strip
+                data.setdefault("source_events", previous_rule.get("source_events", 0))
+                data.setdefault("source_files", previous_rule.get("source_files", []))
+                data.setdefault("common_root_cause", previous_rule.get("common_root_cause", ""))
+                data["_refined"] = True
+                return {
+                    "rule": data,
+                    "history": messages_in,
+                    "previous_title": previous_rule.get("title"),
+                }
+        except Exception as err:
+            logger.warning(f"Refine LLM failed, returning previous_rule unchanged: {err}")
+
+    # Fallback: echo previous rule with light modification
+    fallback = dict(previous_rule)
+    fallback["_refined"] = False
+    fallback["_fallback_note"] = "LLM 不可用, 返回上一轮结果不变, 请稍后重试"
+    return {
+        "rule": fallback,
+        "history": messages_in,
+        "previous_title": previous_rule.get("title"),
+    }
+
+
+@app.post("/api/rules/apply-batch")
+async def apply_rule_to_batch(request: Request):
+    """Apply a synthesized (or refined) rule to multiple selected projects.
+
+    Powers the chat-driven workflow end: the gatekeeper talks with AI to
+    get a rule draft, then clicks "Apply to N selected projects" to push
+    it as a new policy version on each project at once.
+    """
+    try:
+        payload = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {e!s}")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Body must be JSON object")
+
+    project_ids = payload.get("project_ids") or []
+    rule = payload.get("rule") or {}
+    push_immediately = bool(payload.get("push_immediately", True))
+
+    if not isinstance(project_ids, list) or len(project_ids) == 0:
+        raise HTTPException(status_code=400, detail="'project_ids' must be a non-empty list")
+    if not rule.get("title"):
+        raise HTTPException(status_code=400, detail="'rule.title' required")
+
+    results = []
+    for pid in project_ids:
+        if not isinstance(pid, str):
+            results.append({"project_id": str(pid), "ok": False, "error": "invalid id"})
+            continue
+        try:
+            existing = DatabaseService.get_project_policy(pid) or {}
+            skills = existing.get("skills") or []
+            gate_rules = existing.get("gate_rules") or []
+            skill_entry = {
+                "id": f"batch-{int(__import__('time').time()*1000)}",
+                "title": rule.get("title"),
+                "category": rule.get("category", "stability"),
+                "summary": rule.get("summary", ""),
+                "skill_markdown": rule.get("skill_markdown", ""),
+                "source": "batch_aggregate",
+                "source_events": rule.get("source_events"),
+                "source_files": rule.get("source_files"),
+            }
+            new_skills = [s for s in skills if s.get("title") != skill_entry["title"]]
+            new_skills.append(skill_entry)
+            gate_entry = (rule.get("gate_rule") or {})
+            new_gate_rules = [g for g in gate_rules if g.get("title") != gate_entry.get("title")]
+            if gate_entry.get("title"):
+                new_gate_rules.append(gate_entry)
+            new_policy = dict(existing)
+            new_policy["skills"] = new_skills
+            new_policy["gate_rules"] = new_gate_rules
+            DatabaseService.update_project_policy(pid, new_policy)
+            push_state = {"pending": False, "version": None}
+            if push_immediately:
+                try:
+                    push_state = await _broadcast_policy_change(pid, reason=f"batch apply from chat: {rule.get('title')[:60]}")
+                except Exception as e:
+                    push_state = {"pending": False, "version": None, "error": str(e)}
+            results.append({
+                "project_id": pid,
+                "ok": True,
+                "skill_id": skill_entry["id"],
+                "pushed": push_state.get("pending", False) or bool(push_state.get("version")),
+            })
+        except Exception as e:
+            results.append({
+                "project_id": pid,
+                "ok": False,
+                "error": f"{e!s}",
+            })
+    return {"applied": sum(1 for r in results if r["ok"]), "results": results}
+
+
+@app.post("/api/cli/apply-suggestions", response_model=CliApplySuggestionsResponse)
+async def cli_apply_suggestions(request: Request):
+    """AI-powered code refactoring endpoint. Hook calls this with the original
+    file content + suggestions list; AI returns the FULLY rewritten file.
+    Hook then writes it back to disk + git-adds. This is the engine behind
+    the "AI 自动改代码" UX — user presses Y and the file is rewritten.
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "invalid JSON"}, status_code=400)
+
+    project_id = payload.get("project_id") or "default"
+    file_path = payload.get("file_path") or "unknown"
+    original_content = payload.get("original_content") or ""
+    suggestions = payload.get("suggestions") or []
+    language = payload.get("language") or "auto"
+    if not isinstance(suggestions, list):
+        return JSONResponse({"detail": "suggestions must be a list"}, status_code=400)
+
+    logger.info(
+        f"Apply suggestions: project={project_id}, file={file_path}, "
+        f"{len(suggestions)} suggestions, {len(original_content)} chars"
+    )
+    return await CliScanner.apply_suggestions(
+        project_id=project_id,
+        file_path=file_path,
+        original_content=original_content,
+        suggestions=suggestions,
+        language=language,
+    )
+
+
 @app.get("/api/projects")
 async def list_projects():
     """Lists all monitored projects accompanied by pass rate and total scans."""
     return DatabaseService.list_projects_with_stats()
 
 
+@app.get("/api/projects/health-matrix")
+async def projects_health_matrix(days: int = 7):
+    """Aggregated health matrix for the gatekeeper dashboard.
+
+    Returns one row per project with key health indicators over the last
+    `days` days, so the gatekeeper can see at-a-glance which projects are
+    healthy and which need attention. Designed for batch aggregation:
+    the gatekeeper selects multiple rows in the UI and triggers a
+    cross-project rule synthesis.
+    """
+    return DatabaseService.list_projects_health_matrix(days=days)
+
+
 @app.post("/api/projects")
-async def create_project(payload: CreateProjectRequest):
+async def create_project(request: Request):
     """Creates or connects a new monitored project."""
+    try:
+        raw = await request.json()
+    except Exception:
+        # Empty body fallback: create with just the id from the URL or path
+        raw = {}
+    # The ID field on CreateProjectRequest is required; if missing, try
+    # extracting from headers or return 400.
+    if not raw.get("id"):
+        raise HTTPException(status_code=400, detail="Project 'id' is required in request body")
+    payload = CreateProjectRequest(**raw)
     project = DatabaseService.create_project(
         project_id=payload.id,
         name=payload.name,
@@ -295,18 +534,39 @@ async def set_project_gate_mode(project_id: str, payload: dict):
 
 
 @app.post("/api/rules/synthesize")
-async def synthesize_rule_and_skill(payload: dict):
+async def synthesize_rule_and_skill(request: Request):
     """Synthesizes an IDE Agent Skill and Gatekeeper Rule from intercepted code defects.
-    
+
     Closed-loop evolution:
     Intercepted bugs -> Synthesized Rule -> .cursorrules / SKILL.md for IDE AI + Regex Gate for Pre-Commit.
+
+    Two modes:
+      (A) Single event (legacy): payload.critical_issues + payload.suggestions
+      (B) Batch aggregation (new): payload.events = [{critical_issues, suggestions, filename, ...}, ...]
+          — the gatekeeper selects N related events; AI synthesizes ONE unified rule
+            covering the common root cause across all events. More efficient than
+            N rules, easier for the team to internalize.
     """
+    try:
+        payload = await request.json()
+    except Exception as e:
+        logger.warning(f"synthesize_rule_and_skill: invalid JSON body: {e!r}")
+        raise HTTPException(status_code=400, detail=f"Invalid JSON body: {e!s}")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Body must be a JSON object")
     project_id = payload.get("project_id", "default")
+    language = payload.get("language", "typescript")
+
+    # === Batch mode: aggregate multiple scan events into one unified rule ===
+    events = payload.get("events") or []
+    if events and isinstance(events, list) and len(events) > 0:
+        return await _synthesize_from_events(project_id, events, language)
+
+    # === Single event mode (legacy backward-compatible) ===
     critical_issues = payload.get("critical_issues", [])
     suggestions = payload.get("suggestions", [])
     filename = payload.get("filename", "")
     code_snippet = payload.get("code_snippet", "")
-    language = payload.get("language", "typescript")
 
     issues_text = "\n".join(f"- {issue}" for issue in critical_issues)
     if not issues_text:
@@ -358,6 +618,7 @@ async def synthesize_rule_and_skill(payload: dict):
             full_response = "".join(chunks)
             data = extract_json_object(full_response)
             if isinstance(data, dict) and "title" in data and "good_snippet" in data:
+                data["source_events"] = 1
                 return data
         except Exception as err:
             logger.warning(f"LLM rule synthesis failed, falling back to heuristic engine: {err}")
@@ -431,9 +692,165 @@ async def synthesize_rule_and_skill(payload: dict):
         }
 
 
+async def _synthesize_from_events(project_id: str, events: List[Dict[str, Any]], language: str) -> Dict[str, Any]:
+    """Batch-mode synthesis: aggregate N scan events into ONE unified rule.
+
+    Used when a gatekeeper selects multiple related scan events in the UI
+    (e.g., "all the null-pointer issues from last week") and wants one rule
+    that covers the common root cause, instead of N narrow rules.
+
+    Strategy:
+      - Concatenate every event's critical_issues + suggestions.
+      - Build a per-event mini-summary (file + 1-line root cause) so the
+        model sees the *breadth* of similar bugs, not just a flat blob.
+      - LLM synthesizes one rule whose scope is "any future code that would
+        trigger any of these patterns". Fall back to a heuristic engine
+        when no API key is configured.
+    """
+    # --- Aggregate issues ---
+    all_critical: List[str] = []
+    all_suggestions: List[str] = []
+    event_summaries: List[str] = []
+    filenames: List[str] = []
+    for idx, ev in enumerate(events, start=1):
+        if not isinstance(ev, dict):
+            continue
+        ci = ev.get("critical_issues") or []
+        sg = ev.get("suggestions") or []
+        fname = ev.get("filename") or (ev.get("files") or [{}])[0].get("filename", "") or "(未知文件)"
+        all_critical.extend([str(x) for x in ci])
+        all_suggestions.extend([str(x) for x in sg])
+        filenames.append(fname)
+        ci_short = (ci[0] if ci else sg[0] if sg else "未提供") if (ci or sg) else "未提供"
+        ci_short = str(ci_short)
+        if len(ci_short) > 80:
+            ci_short = ci_short[:77] + "..."
+        event_summaries.append(f"  事件{idx}. {fname}: {ci_short}")
+
+    if not all_critical and not all_suggestions:
+        # Nothing to aggregate from — bail to heuristic with empty context.
+        issues_text = "批量聚合请求, 但所有选中事件都为空"
+    else:
+        issues_text = "\n".join(f"- {x}" for x in all_critical) or "(无 critical, 只有 suggestions)"
+
+    # --- LLM path (preferred) ---
+    if settings.has_api_key:
+        sys_prompt = (
+            "你是一名世界顶尖的软件架构师与 DevSecOps 质量工程专家。\n"
+            "我们正在构建一套「缺陷拦截 -> 经验沉淀 -> 规则/Skill进化」的自闭环质量防护体系。\n"
+            f"守门员从 FlowDev 门禁拦截历史中勾选了 {len(event_summaries)} 条事件, 这些事件可能存在同一个根因或同类风险。\n"
+            "请从这些事件的“共性”中提炼出 **一条** 能同时预防未来同类缺陷的统一规则与 IDE Agent Skill (不要给每条事件单独生成规则)。\n"
+            "**关键要求**: 提炼出的规则的覆盖范围应能同时应对所有选中事件中出现的同质缺陷。\n"
+            "必须直接输出严格合法的 JSON 代码块 (```json ... ```):\n"
+            "{\n"
+            '  "title": "规则标题",\n'
+            '  "category": "stability|security|performance|maintainability",\n'
+            '  "severity": "critical|warning|info",\n'
+            '  "summary": "一句话核心指导原则与共同根因",\n'
+            '  "bad_snippet": "// ❌ 危险反例代码 (带详细注释说明为何崩溃)",\n'
+            '  "good_snippet": "// ✅ 规范正例代码 (覆盖所有选中事件的防御)",\n'
+            '  "skill_markdown": "专为 IDE AI 编程助手 (Cursor / Copilot / Claude Code / Antigravity) 定制的 .cursorrules / SKILL.md 规则指令 Markdown, 包含触发上下文、编码准则、正反示例",\n'
+            '  "gate_rule": {\n'
+            '    "title": "卡点规则名称",\n'
+            '    "pattern": "用于在 pre-commit 正则检测中静态拦截同类高危代码的正则表达式 (覆盖所有选中事件)",\n'
+            '    "message": "门禁卡点拦截提示信息",\n'
+            '    "level": "critical|warning|info"\n'
+            '  },\n'
+            '  "source_events_count": ' + str(len(event_summaries)) + ',\n'
+            '  "common_root_cause": "对选中事件共同根因的一句话诊断"\n'
+            "}"
+        )
+        user_prompt = (
+            f"目标仓库: {project_id}\n"
+            f"代码语言: {language}\n"
+            f"选中事件 ({len(event_summaries)} 条):\n"
+            + "\n".join(event_summaries) + "\n\n"
+            f"所有 critical issues (合计 {len(all_critical)} 条):\n{issues_text}\n"
+        )
+        if all_suggestions:
+            user_prompt += f"\n所有改进建议 (合计 {len(all_suggestions)} 条):\n" + "\n".join(f"- {s}" for s in all_suggestions[:20])
+
+        messages = [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        try:
+            chunks = []
+            async for token in LLMService.stream_chat(messages, temperature=0.2):
+                chunks.append(token)
+            full_response = "".join(chunks)
+            data = extract_json_object(full_response)
+            if isinstance(data, dict) and "title" in data and "good_snippet" in data:
+                # Always overwrite aggregate metadata so the caller sees the true count
+                data["source_events"] = len(event_summaries)
+                data["source_files"] = list(set(filenames))
+                data["_aggregated"] = True
+                return data
+            logger.warning(f"Batch LLM synthesis returned malformed JSON, falling back.")
+        except Exception as err:
+            logger.warning(f"Batch LLM synthesis failed, falling back to heuristic: {err}")
+
+    # --- Heuristic fallback (single-rule, simple keyword detection) ---
+    full_text = " ".join(all_critical + all_suggestions + event_summaries).lower()
+    if any(k in full_text for k in ("null", "undefined", "空指针", "typeerror")):
+        return {
+            "title": "防御性可选链与空指针安全防护规范",
+            "category": "stability",
+            "severity": "critical",
+            "summary": f"聚合自 {len(event_summaries)} 条事件的共同根因: 未对深层对象做空值校验直接属性访问, 运行时崩溃。",
+            "bad_snippet": "// ❌ 未校验直接属性访问, 触发 TypeError\nconst userName = response.data.user.profile.name;",
+            "good_snippet": "// ✅ 可选链 + 空值合并, 安全降级\nconst userName = response?.data?.user?.profile?.name ?? 'anonymous';",
+            "skill_markdown": (
+                "# Skill: Defensive Optional Chaining & Null Safety\n\n"
+                "## Context\nAll scan events aggregated. When writing JavaScript / TypeScript code "
+                "that accesses external API payloads or nested state, avoid direct chaining "
+                "that causes runtime crashes.\n\n"
+                "## Guidelines\n1. Always use optional chaining (`?.`)\n"
+                "2. Provide safe fallbacks with `??`\n"
+                "3. Perform guard clauses early\n\n"
+                "## Example\n```typescript\nconst total = cart?.summary?.totalAmount ?? 0;\n```\n"
+            ),
+            "gate_rule": {
+                "title": "未防御的深层属性访问与空对象引用",
+                "pattern": r"\b(null|undefined)\.[a-zA-Z0-9_]+",
+                "message": "检测到直接对 null/undefined 做属性访问, 请使用可选链 (?.) 或显式判空",
+                "level": "critical",
+            },
+            "source_events": len(event_summaries),
+            "source_files": list(set(filenames)),
+            "common_root_cause": "未对深层对象做空值校验直接属性访问",
+        }
+    # Generic fallback
+    return {
+        "title": f"聚合规则: 来自 {len(event_summaries)} 条事件的共性防御",
+        "category": "stability",
+        "severity": "warning",
+        "summary": f"对 {len(event_summaries)} 条事件的统一防御建议 (LLM 未配置, 使用启发式 fallback)。",
+        "bad_snippet": "// ❌ 未提供 (heuristic fallback)",
+        "good_snippet": "// ✅ 未提供 (heuristic fallback)",
+        "skill_markdown": f"# 聚合防御规范\n\n该规则由 {len(event_summaries)} 条事件聚合生成, 建议手动完善。\n\n## 涉及的缺陷\n" + "\n".join(f"- {x}" for x in all_critical[:10]) + "\n",
+        "gate_rule": {
+            "title": "聚合启发式门禁",
+            "pattern": r".*",
+            "message": "聚合规则触发, 请人工 review",
+            "level": "warning",
+        },
+        "source_events": len(event_summaries),
+        "source_files": list(set(filenames)),
+        "common_root_cause": "(启发式 fallback, 建议配置 LLM API 后重新生成)",
+    }
+
+
 @app.post("/api/projects/{project_id}/rules/apply")
-async def apply_project_rule(project_id: str, payload: dict):
-    """Applies and persists a synthesized rule and agent skill to the project's gatekeeper policy."""
+async def apply_project_rule(project_id: str, request: Request):
+    """Applies and persists a synthesized rule and agent skill to the project's gatekeeper policy.
+
+    Side effect: when push mode is enabled for this project, applying a rule
+    automatically stages it as a pending push so every local repo with the
+    FlowDev Git hook will be prompted on their next commit. No additional
+    "push" action is required from the gatekeeper.
+    """
+    payload = await _read_json_body(request)
     policy = DatabaseService.get_project_policy(project_id) or {}
     custom_rules = policy.get("custom_rules", [])
     agent_skills = policy.get("agent_skills", [])
@@ -465,8 +882,18 @@ async def apply_project_rule(project_id: str, payload: dict):
 
     success = DatabaseService.update_project_policy(project_id, policy)
     new_version = None
+    auto_pushed = False
     if success:
+        push_state_before = DatabaseService.get_project_push_state(project_id)
+        push_enabled = push_state_before.get("push_enabled", True)
         new_version = await _broadcast_policy_change(project_id, reason="新增 / 更新防御规则与 Skill")
+        push_state_after = DatabaseService.get_project_push_state(project_id)
+        # _broadcast_policy_change automatically marks pending_push if push_enabled
+        auto_pushed = (
+            push_enabled
+            and bool(push_state_after.get("pending_push_version"))
+            and push_state_after.get("pending_push_version") == new_version
+        )
     return {
         "success": success,
         "project_id": project_id,
@@ -474,12 +901,23 @@ async def apply_project_rule(project_id: str, payload: dict):
         "agent_skills_count": len(agent_skills),
         "policy": policy,
         "policy_version": new_version,
+        "auto_pushed": auto_pushed,
+        "pending_push_version": (
+            DatabaseService.get_project_push_state(project_id).get("pending_push_version")
+            if success else None
+        ),
     }
 
 
 @app.delete("/api/projects/{project_id}/rules")
-async def delete_project_rule(project_id: str, payload: dict):
-    """Removes a custom rule or skill from a project's gatekeeper policy."""
+async def delete_project_rule(project_id: str, request: Request):
+    """Removes a custom rule or skill from a project's gatekeeper policy.
+
+    Side effect: when push mode is enabled for this project, deleting a rule
+    also bumps policy_version and re-stages a pending push so local repos
+    pick up the updated rule set on their next commit.
+    """
+    payload = await _read_json_body(request)
     policy = DatabaseService.get_project_policy(project_id) or {}
     custom_rules = policy.get("custom_rules", [])
     agent_skills = policy.get("agent_skills", [])
@@ -882,6 +1320,46 @@ async def get_hook_script():
         content = hook_file.read_text(encoding="utf-8")
         return PlainTextResponse(content=content, media_type="application/javascript; charset=utf-8")
     return PlainTextResponse(content="// flowdev hook not found", status_code=404)
+
+
+@app.get("/api/hook/version")
+async def get_hook_version():
+    """
+    Hook self-upgrade endpoint. Returns the current hook's version + sha so
+    installed copies can detect out-of-date state and self-replace. The hook
+    reads HOOK_VERSION constant directly from the source file, so bumping the
+    constant automatically becomes the new 'latest' — no manual registry.
+    """
+    # == HANDBOOK: hook-version-api ==
+    # **Hook 自升级协议的源头端点。**
+    #
+    # Hook 启动时调这里, 服务器返回当前 hook 版本号 + sha + size + 下载地址。
+    # Hook 端比对 local_version vs server.version, 如需升级:
+    #   1. GET /scripts/flowdev-hook.js 下载新脚本
+    #   2. 备份 .git/hooks/pre-commit.bak
+    #   3. 写入新脚本 + 重新 spawn
+    #
+    # 零运维: 改完 hook 代码, 改顶部 const HOOK_VERSION = "X.Y.Z", 团队所有项目下次 commit 自动升级。
+    # == /HANDBOOK ==
+    import hashlib
+    import re
+    hook_file = Path(__file__).parent.parent / "scripts" / "flowdev-hook.js"
+    if not hook_file.exists():
+        hook_file = Path("scripts/flowdev-hook.js")
+    if not hook_file.exists():
+        return {"version": "0.0.0", "sha": "", "size": 0}
+
+    text = hook_file.read_text(encoding="utf-8")
+    # Extract HOOK_VERSION constant from source — single source of truth
+    m = re.search(r'const\s+HOOK_VERSION\s*=\s*"([^"]+)"', text)
+    version = m.group(1) if m else "0.0.0"
+    sha = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    return {
+        "version": version,
+        "sha": sha,
+        "size": len(text),
+        "download_url": "/scripts/flowdev-hook.js",
+    }
 
 
 @app.get("/api/events/stream")

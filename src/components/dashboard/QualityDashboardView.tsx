@@ -106,6 +106,12 @@ export function QualityDashboardView() {
     setIsRuleModalOpen(true);
   };
 
+  const handleOpenBatchAggregate = () => {
+    // Open RuleEvolutionModal in batch mode (no scanEvent, modal will route to batch tab)
+    setRuleModalEvent(null);
+    setIsRuleModalOpen(true);
+  };
+
   const handleOpenRuleLibrary = () => {
     const targetProj =
       selectedProjectId && selectedProjectId !== "all"
@@ -284,6 +290,15 @@ export function QualityDashboardView() {
           >
             <Sparkles className="h-3.5 w-3.5 text-amber-500" />
             <span>规则与 Skill 库</span>
+          </button>
+
+          <button
+            onClick={handleOpenBatchAggregate}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-cyan-500/30 bg-cyan-500/10 hover:bg-cyan-500/20 text-xs font-semibold text-cyan-700 dark:text-cyan-300 transition-colors shadow-sm cursor-pointer"
+            title="从多条拦截事件中提取共同根因, 一次性聚合生成一条跨场景的通用 Skill + 规则"
+          >
+            <Layers className="h-3.5 w-3.5 text-cyan-500" />
+            <span>批量聚合生成 Skill</span>
           </button>
         </div>
       </div>

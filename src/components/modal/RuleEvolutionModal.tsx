@@ -49,7 +49,7 @@ export function RuleEvolutionModal({
   projectId,
   onRuleApplied,
 }: RuleEvolutionModalProps) {
-  const [activeTab, setActiveTab] = useState<"evolve" | "library">("evolve");
+  const [activeTab, setActiveTab] = useState<"evolve" | "library" | "batch">("evolve");
   const [mounted, setMounted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [synthesizedRule, setSynthesizedRule] = useState<SynthesizedRule | null>(null);
@@ -58,6 +58,85 @@ export function RuleEvolutionModal({
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   // 折叠面板状态：默认收起 Skill + Gatekeeper 两块次要信息
   const [expandedSection, setExpandedSection] = useState<"skill" | "gate" | null>(null);
+  // 守门员/开发者身份提示: 默认收起
+  const [showRoleHint, setShowRoleHint] = useState(true);
+  // === Batch aggregate state ===
+  const [batchEvents, setBatchEvents] = useState<ScanEventItem[]>([]);
+  const [batchSelected, setBatchSelected] = useState<string[]>([]); // event ids
+  const [batchLoading, setBatchLoading] = useState(false);
+  const [batchResult, setBatchResult] = useState<SynthesizedRule | null>(null);
+  const [batchError, setBatchError] = useState<string | null>(null);
+
+  const fetchBatchEvents = async () => {
+    setBatchLoading(true);
+    setBatchError(null);
+    try {
+      const res = await fetch(
+        `http://127.0.0.1:8000/api/projects/${encodeURIComponent(targetProjectId)}/events?limit=50`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const list = Array.isArray(data) ? data : Array.isArray(data?.events) ? data.events : [];
+        setBatchEvents(list);
+        if (list.length === 0) {
+          setBatchError("该项目暂无拦截事件, 请在产生 critical issues 后再使用批量聚合");
+        }
+      } else {
+        setBatchError(`获取事件列表失败 (HTTP ${res.status})`);
+      }
+    } catch (e) {
+      setBatchError(`网络错误: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBatchLoading(false);
+    }
+  };
+
+  const toggleBatchSelect = (eventId: string) => {
+    setBatchSelected((prev) =>
+      prev.includes(eventId) ? prev.filter((x) => x !== eventId) : [...prev, eventId]
+    );
+  };
+
+  const synthesizeBatchRule = async () => {
+    if (batchSelected.length < 2) {
+      setBatchError("批量聚合至少选择 2 条事件");
+      return;
+    }
+    const selected = batchEvents.filter((e) => batchSelected.includes(String(e.id ?? "")));
+    if (selected.length === 0) {
+      setBatchError("选中事件无法定位, 请重试");
+      return;
+    }
+    setBatchLoading(true);
+    setBatchError(null);
+    try {
+      const eventsPayload = selected.map((ev) => ({
+        event_id: ev.id,
+        filename: ev.files?.[0]?.filename ?? "unknown",
+        critical_issues: ev.critical_issues ?? [],
+        suggestions: ev.suggestions ?? [],
+        timestamp: ev.timestamp,
+      }));
+      const res = await fetch("http://127.0.0.1:8000/api/rules/synthesize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_id: targetProjectId,
+          events: eventsPayload,
+        }),
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`HTTP ${res.status}: ${errText.slice(0, 200)}`);
+      }
+      const data: SynthesizedRule = await res.json();
+      setBatchResult(data);
+    } catch (e) {
+      setBatchError(`聚合生成失败: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBatchLoading(false);
+    }
+  };
 
   useEffect(() => {
     setMounted(true);
@@ -110,8 +189,9 @@ export function RuleEvolutionModal({
       setActiveTab("evolve");
       synthesizeRuleFromEvent(scanEvent);
     } else {
-      setActiveTab("library");
-      fetchProjectLibrary();
+      // Opened via "批量聚合" entry on dashboard: default to batch tab
+      setActiveTab("batch");
+      fetchBatchEvents();
     }
   }, [isOpen, scanEvent, projectId]);
 
@@ -186,9 +266,36 @@ export function RuleEvolutionModal({
       );
 
       if (res.ok) {
+        const data = await res.json();
         setAppliedSuccess(true);
         if (onRuleApplied) onRuleApplied();
         fetchProjectLibrary();
+
+        // Push Mode feedback: tell the gatekeeper the沉淀 has already auto-
+        // dispatched to every local repo. No extra "push" click needed.
+        if (data?.auto_pushed && data?.pending_push_version) {
+          setPushState((prev) => ({
+            ...prev,
+            policy_version: data.policy_version || prev.policy_version,
+            pending_push_version: data.pending_push_version,
+            pending: true,
+          }));
+          setPushToast({
+            kind: "success",
+            text: `✅ 沉淀成功！已自动下发给所有本地仓库（v${data.pending_push_version}）。开发者下次 git commit 时会在终端收到 Y/n 询问，无需手动同步。`,
+          });
+          setTimeout(() => setPushToast(null), 8000);
+        } else if (data?.policy_version) {
+          setPushState((prev) => ({
+            ...prev,
+            policy_version: data.policy_version,
+          }));
+          setPushToast({
+            kind: "info",
+            text: `✅ 沉淀成功（v${data.policy_version}）。推送模式已关闭，规则不会主动下发到本地仓库。`,
+          });
+          setTimeout(() => setPushToast(null), 6000);
+        }
       }
     } catch (err) {
       console.error("Failed to apply rule", err);
@@ -387,6 +494,8 @@ export function RuleEvolutionModal({
 
   const totalActiveRulesCount = libRules.length;
 
+  // === 角色提示 banner: 明确告诉开发者这里是为守门员设计的 ===
+
   // 当前闭环进度：已应用=4；Evolve 加载中=1；Evolve 出结果=2；Library=3
   const activeStage: 1 | 2 | 3 | 4 = appliedSuccess
     ? 4
@@ -471,6 +580,28 @@ export function RuleEvolutionModal({
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-950/60 backdrop-blur-sm animate-in fade-in duration-200">
       <div className="relative w-full max-w-4xl max-h-[90vh] flex flex-col rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl overflow-hidden">
+        {/* 角色提示 banner: 守门员 vs 开发者 */}
+        {showRoleHint && (
+          <div className="px-6 pt-4 pb-0">
+            <div className="flex items-start gap-3 rounded-lg border border-sky-200/70 dark:border-sky-800/40 bg-sky-50/60 dark:bg-sky-950/20 px-3 py-2 text-xs">
+              <span className="text-base leading-none">🛡️</span>
+              <div className="flex-1 text-sky-900 dark:text-sky-200">
+                <strong>该控制台主要为守门员设计。</strong>
+                <span className="ml-1 text-sky-700 dark:text-sky-300">
+                  开发者只需 <code className="px-1 py-0.5 rounded bg-white/70 dark:bg-slate-900/60 font-mono text-[11px]">git commit</code>，由 hook 零交互完成：拉推送、AI 审查、AI 重写。不需要打开此页面。
+                </span>
+              </div>
+              <button
+                type="button"
+                aria-label="隐藏提示"
+                onClick={() => setShowRoleHint(false)}
+                className="text-sky-500 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-200 transition-colors"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/60">
           <div className="flex items-center gap-3">
@@ -525,6 +656,27 @@ export function RuleEvolutionModal({
 
           <button
             onClick={() => {
+              setActiveTab("batch");
+              fetchBatchEvents();
+            }}
+            className={cn(
+              "flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-colors",
+              activeTab === "batch"
+                ? "border-cyan-500 text-cyan-600 dark:text-cyan-400 bg-cyan-50/20 dark:bg-cyan-950/10"
+                : "border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
+            )}
+          >
+            <Layers className="h-3.5 w-3.5" />
+            <span>批量聚合提炼 (Batch Aggregate)</span>
+            {batchSelected.length > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full text-[9px] bg-cyan-500 text-white font-mono leading-none">
+                {batchSelected.length}
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={() => {
               setActiveTab("library");
               fetchProjectLibrary();
             }}
@@ -547,7 +699,200 @@ export function RuleEvolutionModal({
 
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {activeTab === "evolve" ? (
+          {activeTab === "batch" ? (
+            <div className="space-y-4">
+              {/* Header */}
+              <div className="flex items-start gap-3 rounded-lg border border-cyan-200/60 dark:border-cyan-800/40 bg-cyan-50/60 dark:bg-cyan-950/20 px-4 py-3">
+                <Layers className="h-4 w-4 text-cyan-600 dark:text-cyan-400 mt-0.5 shrink-0" />
+                <div className="text-xs text-cyan-900 dark:text-cyan-200">
+                  <strong className="font-semibold">批量聚合提炼:</strong>
+                  <span className="ml-1">
+                    从多条拦截事件中提取共同根因, 一次性提炼为一条跨场景的通用规则, 避免 N 条窄规则凑团难维护。
+                  </span>
+                </div>
+              </div>
+
+              {/* Error / status */}
+              {batchError && (
+                <div className="px-3 py-2 rounded-md bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-xs text-rose-700 dark:text-rose-300">
+                  ⚠️ {batchError}
+                </div>
+              )}
+
+              {/* Events list (multi-select) */}
+              {batchLoading && batchEvents.length === 0 ? (
+                <div className="py-12 flex flex-col items-center justify-center text-center">
+                  <div className="h-8 w-8 border-3 border-cyan-500 border-t-transparent rounded-full animate-spin" />
+                  <div className="mt-3 text-xs text-slate-500">加载拦截事件列表...</div>
+                </div>
+              ) : batchEvents.length === 0 ? (
+                <div className="py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+                  暂无可聚合事件。请让 hook 拦截一些 critical issues 后再来。
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-[55vh] overflow-y-auto pr-2">
+                  {batchEvents.map((ev, idx) => {
+                    const id = String(ev.id ?? idx);
+                    const selected = batchSelected.includes(id);
+                    const ci = (ev.critical_issues ?? []).slice(0, 2);
+                    const fname = ev.files?.[0]?.filename ?? ev.filename ?? "unknown";
+                    return (
+                      <label
+                        key={id}
+                        className={cn(
+                          "flex items-start gap-3 rounded-lg border px-3 py-2.5 cursor-pointer transition-colors",
+                          selected
+                            ? "border-cyan-400 dark:border-cyan-700 bg-cyan-50/50 dark:bg-cyan-950/20"
+                            : "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-slate-300 dark:hover:border-slate-700"
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={() => toggleBatchSelect(id)}
+                          className="mt-1 h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="font-mono font-semibold text-slate-700 dark:text-slate-300 truncate">
+                              {fname}
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-rose-100 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 font-mono">
+                              {ev.critical_issues?.length ?? 0} critical
+                            </span>
+                            <span className="text-[10px] text-slate-400 ml-auto font-mono shrink-0">
+                              {ev.timestamp ? new Date(ev.timestamp).toLocaleString("zh-CN", { hour12: false }).slice(5, 16) : ""}
+                            </span>
+                          </div>
+                          {ci.length > 0 && (
+                            <ul className="mt-1.5 space-y-0.5 text-[11px] text-slate-600 dark:text-slate-400">
+                              {ci.map((c, i) => (
+                                <li key={i} className="line-clamp-1">
+                                  ❌ {c}
+                                </li>
+                              ))}
+                              {(ev.critical_issues?.length ?? 0) > 2 && (
+                                <li className="text-[10px] text-slate-400 italic">
+                                  +{(ev.critical_issues?.length ?? 0) - 2} 项更多...
+                                </li>
+                              )}
+                            </ul>
+                          )}
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Action bar */}
+              {batchEvents.length > 0 && (
+                <div className="flex items-center justify-between gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
+                  <div className="text-xs text-slate-500 dark:text-slate-400">
+                    已选 <strong className="text-cyan-600 dark:text-cyan-400 font-mono">{batchSelected.length}</strong> 条事件
+                    {batchSelected.length > 0 && batchSelected.length < 2 && (
+                      <span className="ml-2 text-rose-500">(至少 2 条才能聚合)</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBatchSelected([]);
+                        setBatchResult(null);
+                      }}
+                      className="px-3 py-1.5 text-xs font-semibold rounded-md border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
+                    >
+                      清空选择
+                    </button>
+                    <button
+                      type="button"
+                      onClick={synthesizeBatchRule}
+                      disabled={batchSelected.length < 2 || batchLoading}
+                      className={cn(
+                        "flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold rounded-md transition-colors",
+                        batchSelected.length < 2 || batchLoading
+                          ? "bg-slate-200 dark:bg-slate-800 text-slate-400 cursor-not-allowed"
+                          : "bg-cyan-600 hover:bg-cyan-700 text-white shadow-sm shadow-cyan-500/20"
+                      )}
+                    >
+                      {batchLoading ? (
+                        <>
+                          <div className="h-3 w-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          <span>AI 聚合提炼中...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Wand2 className="h-3.5 w-3.5" />
+                          <span>聚合生成规则</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Aggregated result preview */}
+              {batchResult && (
+                <div className="mt-4 rounded-xl border border-emerald-300 dark:border-emerald-700 bg-emerald-50/30 dark:bg-emerald-950/20 p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-300 uppercase tracking-wider">
+                        ✓ AI 聚合结果 (跨 {batchResult.source_events ?? batchSelected.length} 条事件)
+                      </div>
+                      <h3 className="mt-1 text-base font-bold text-slate-900 dark:text-slate-100">
+                        {batchResult.title}
+                      </h3>
+                      {batchResult.common_root_cause && (
+                        <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
+                          🔑 共同根因: {batchResult.common_root_cause}
+                        </p>
+                      )}
+                      {batchResult.source_files && batchResult.source_files.length > 0 && (
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          {batchResult.source_files.slice(0, 6).map((f) => (
+                            <span key={f} className="px-1.5 py-0.5 text-[10px] font-mono rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                              {f}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setBatchResult(null)}
+                      className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                      aria-label="关闭"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  {batchResult.summary && (
+                    <p className="text-xs text-slate-700 dark:text-slate-300">
+                      {batchResult.summary}
+                    </p>
+                  )}
+                  <details className="text-xs">
+                    <summary className="cursor-pointer text-cyan-600 dark:text-cyan-400 font-semibold">
+                      查看正反示例 + Skill 内容
+                    </summary>
+                    <div className="mt-2 space-y-2">
+                      {batchResult.bad_snippet && (
+                        <pre className="p-2 rounded bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-[11px] overflow-x-auto whitespace-pre">
+                          {batchResult.bad_snippet}
+                        </pre>
+                      )}
+                      {batchResult.good_snippet && (
+                        <pre className="p-2 rounded bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/50 text-[11px] overflow-x-auto whitespace-pre">
+                          {batchResult.good_snippet}
+                        </pre>
+                      )}
+                    </div>
+                  </details>
+                </div>
+              )}
+            </div>
+          ) : activeTab === "evolve" ? (
             loading ? (
               <div className="py-20 flex flex-col items-center justify-center text-center space-y-3">
                 <div className="h-10 w-10 border-3 border-amber-500 border-t-transparent rounded-full animate-spin" />
@@ -1171,23 +1516,23 @@ function PushModeCard({
           <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
             {pushState.pending ? (
               <>
-                本地开发者下次{" "}
+                📦 刚刚沉淀了{" "}
+                <code className="px-1 rounded bg-amber-100 dark:bg-amber-900/40 font-mono">
+                  v{pushState.last_applied_version || pushState.policy_version}
+                </code>
+                ，本地开发者下次{" "}
                 <code className="px-1 rounded bg-slate-100 dark:bg-slate-800 font-mono">
                   git commit
                 </code>{" "}
-                时，终端会询问是否同步{" "}
-                <code className="px-1 rounded bg-amber-100 dark:bg-amber-900/40 font-mono">
-                  v{pushState.policy_version}
-                </code>
-                ，按{" "}
+                时会在终端询问是否同步，按{" "}
                 <kbd className="px-1 rounded border border-amber-300 dark:border-amber-700 font-mono">
                   Y
                 </kbd>{" "}
-                即自动写入 AGENTS.md / .cursorrules / SKILL.md 并随本次提交入库。
+                即自动写入 AGENTS.md / .cursorrules / SKILL.md 并随本次 commit 入库。
               </>
             ) : lastAppliedDisplay ? (
               <>
-                ✅ 最近一次推送{" "}
+                ✅ 最近一次沉淀{" "}
                 <code className="px-1 rounded bg-slate-100 dark:bg-slate-800 font-mono">
                   v{pushState.last_applied_version}
                 </code>{" "}
@@ -1195,19 +1540,15 @@ function PushModeCard({
                 <span className="font-mono text-emerald-700 dark:text-emerald-300">
                   {lastAppliedDisplay}
                 </span>{" "}
-                被开发者应用入库。
+                被开发者应用入库。下次守门员点击【沉淀】时会自动下发新版本。
               </>
             ) : (
               <>
-                点击「推送」后，规则更新会在开发者下次{" "}
+                守门员点击【沉淀】后，规则会自动下发给所有本地仓库。开发者下次{" "}
                 <code className="px-1 rounded bg-slate-100 dark:bg-slate-800 font-mono">
                   git commit
                 </code>{" "}
-                时主动下发，开发者只需在终端按一次{" "}
-                <kbd className="px-1 rounded border border-slate-300 dark:border-slate-700 font-mono">
-                  Y
-                </kbd>{" "}
-                确认即可，零手动同步命令。
+                时会收到 Y/n 询问，无需手动同步。
               </>
             )}
           </p>
@@ -1244,12 +1585,13 @@ function PushModeCard({
               "px-3 py-1.5 text-[11px] font-bold rounded-md transition-all flex items-center gap-1.5",
               pushState.pending
                 ? "bg-amber-500 hover:bg-amber-600 text-white shadow-sm"
-                : "bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-700 hover:to-cyan-700 text-white shadow-sm",
+                : "bg-slate-700 hover:bg-slate-800 text-white shadow-sm",
               (pushLoading || !pushState.push_enabled) && "opacity-50 cursor-not-allowed"
             )}
+            title="通常无需点击：守门员点击【沉淀】后，系统已自动下发给所有本地仓库。仅在需要强制 bump 版本号时使用。"
           >
             {pushLoading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-            {pushState.pending ? "再次推送新版本" : "推送至本地仓库"}
+            {pushState.pending ? "强制再推一次" : "手动再推送"}
           </button>
         </div>
       </div>
@@ -1278,7 +1620,7 @@ function PushModeCard({
 
       <div className="flex items-center gap-1 text-[10px] text-slate-500 dark:text-slate-400 font-mono flex-wrap">
         <span className="px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/60">
-          ① 点击推送
+          ① 守门员点击【沉淀】
         </span>
         <ArrowRight className="h-3 w-3" />
         <span className="px-1.5 py-0.5 rounded bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/60">

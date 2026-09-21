@@ -209,6 +209,8 @@ export interface ScanEventItem {
     preview: string;
   }>;
   created_at: string;
+  timestamp?: string;
+  filename?: string;
   is_read?: boolean;
 }
 
@@ -235,4 +237,9 @@ export interface SynthesizedRule {
   good_snippet: string;
   skill_markdown: string;
   gate_rule: CustomGateRule;
+  // Batch aggregate metadata (optional, only present for /api/rules/synthesize with events[])
+  source_events?: number;
+  source_files?: string[];
+  common_root_cause?: string;
+  skill_markdown_antigravity?: string;
 }

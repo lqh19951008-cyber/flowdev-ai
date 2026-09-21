@@ -19,6 +19,8 @@ When generating or refactoring code in this repository, you MUST adhere to the f
   *Enforcement:* 严禁使用 eval() 或 exec() 危险动态执行函数！
 - **React/TS 组件空值安全访问与可选链防御规范**: `(?:const|let)\s+\w+\s*=\s*(?:use\w+\(|useStore\(|props\.|state\.)[^;\n]*\.(?!\?)[a-zA-Z_]\w*` (Level: critical)
   *Enforcement:* 🚫 [FlowDev-Gate] 检测到对可能为 undefined 的数据源直接做属性解构。必须使用可选链 (?.) + 空值合并 (?? 默认值) 兜底！
+- **react-ts-null-safety**: `\.\w+\.\w+\b` (Level: critical)
+  *Enforcement:* ��⵽���������ʽ���ʣ���ʹ�ÿ�ѡ��
 
 ## 📚 Synthesized Engineering Best Practices
 ### Rule 1: 防御性可选链与空指针安全防护规范
@@ -77,3 +79,10 @@ Prevent security vulnerabilities arising from untrusted input execution or unsan
 3. 类型守卫渲染：对象为 null 时返回 <Skeleton /> 或 <Empty />
 4. URL 参数白名单：任何 params.get(...) 必须经由正则白名单校验后再写入 Store
 
+
+### Rule 5: React/TS ��ֵ��ȫ�����淶
+**Principle:** �Կ���Ϊ null/undefined �� store/props/URL ���������ÿ�ѡ�� + ��ֵ�ϲ�����
+
+# React/TS ��ֵ��ȫ
+
+ǿ��ʹ�ÿ�ѡ�� ?.

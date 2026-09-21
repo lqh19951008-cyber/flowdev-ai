@@ -4,13 +4,33 @@
 
 ---
 
+## 🎯 一分钟理解 FlowDev-AI 是干什么的
+
+FlowDev-AI 是个**“守门员工具”**，分两类系统：
+- **守门员**（如架构师 / 安全 / QA Lead）打开**前端**写规则、写 prompt、推送全网。
+- **开发者**只要 `git commit` —— hook **零交互**完成：拉推送、AI 审查、修复、提交。
+
+> ✅ **开发者不需要打开前端。** 后端 + 本地 hook 即可完成闭环。
+
+> ✅ **前端是给守门员用的控制台。** 包含规则编辑、审计、紧急广播。
+
+---
+
+## 📖 你是哪一类人？
+
+| 你的角色 | 你需要做的 | 你需要看哪里 |
+|----------|-----------|------------|
+| 🛡️ **守门员** (架构师 / 安全 / QA Lead) | 编辑规则、写 prompt、推送全网、审计 | **前端** [http://localhost:3000](http://localhost:3000) |
+| 👨‍💻 **开发者** (业务代码) | 写代码、`git commit`、`--auto-fix` | **不需要打开前端**。全部由 hook 处理 |
+| 🔧 **运维 / 部署** | 启动后端、配置 LLM API key、飞书 webhook | `backend/main.py` + `.env` |
+
 ## 📖 目录 (Table of Contents)
 
 1. [项目定位与核心架构](#-项目定位与核心架构)
 2. [核心技术栈](#-核心技术栈)
 3. [双姿势使用详解](#-双姿势使用详解)
-   - [姿势 1：Web 可视化 DAG 交互工作台](#姿势-1web-可视化-dag-交互工作台)
-   - [姿势 2：本地 Git Pre-commit 钩子与 CLI 门禁](#姿势-2本地-git-pre-commit-钩子与-cli-门禁)
+   - [姿势 1：Web 可视化 DAG 交互工作台（守门员用）](#姿势-1web-可视化-dag-交互工作台守门员用)
+   - [姿势 2：本地 Git Pre-commit 钩子与 CLI 门禁（开发者用）](#姿势-2本地-git-pre-commit-钩子与-cli-门禁开发者用)
 4. [一键安装与启动指南](#-一键安装与启动指南)
 5. [模型配置与网络适配](#-模型配置与网络适配)
 6. [后端 API 接口字典](#-后端-api-接口字典)
@@ -82,11 +102,43 @@ graph TD
 
 ---
 
+## 👨‍💻 开发者零交互承诺
+
+> 如果你是写业务代码的开发者，请只读这一节。
+
+你的 commit 生命周期里**不需要做任何额外动作**。仅需：
+
+```bash
+git add .
+git commit -m "feat: 新增 XX 功能"   # hook 在 commit 时自动跑
+```
+
+**以下是 hook 自动完成的事项**，你不需要手工操作：
+
+| 步骤 | 谁负责 | 备注 |
+|---|---|---|
+| 🪝 Hook 自升级 | hook | — |
+| 📤 拉取服务端推送 | hook | 零提示，应用 8 个 IDE 规则文件 |
+| 🛡️ AI 审查你的代码 | hook + 后端 | critical 会弹窗 + 详细 issues 进 OUTPUT |
+| 🤖 AI 自动重写代码 | `--auto-fix --commit` | critical 拦截后你要输这条命令一次 |
+
+如果 commit 被拦了（弹窗显示 critical issues），你只需：
+
+```bash
+node .git/hooks/pre-commit --auto-fix --commit   # AI 修代码 + 自动重新提交
+```
+
+> **你不需要看前端、不需要看后端、不需要看推送状态**。全部由 hook 完成。
+
+---
+
 ## 🎯 双姿势使用详解
 
-FlowDev-AI 同时支持 **Web 可视化交互** 与 **本地 CLI Git 自动化门禁** 两种落地形态：
+FlowDev-AI 分为 **守门员面板（Web 可视化交互）** 与 **本地 CLI Git 自动化门禁** 两种落地形态，**二者面向不同角色**：
 
-### 姿势 1：Web 可视化 DAG 交互工作台
+### 姿势 1：Web 可视化 DAG 交互工作台（守门员用）
+
+> **目标用户：守门员**。开发者不需要打开这个页面。
 
 访问地址：`http://localhost:3000`
 
@@ -115,7 +167,9 @@ FlowDev-AI 同时支持 **Web 可视化交互** 与 **本地 CLI Git 自动化�
 
 ---
 
-### 姿势 2：本地 Git Pre-commit 钩子与 CLI 门禁
+### 姿势 2：本地 Git Pre-commit 钩子与 CLI 门禁（开发者用）
+
+> **目标用户：开发者**。全部零交互，仅 commit 一次。
 
 在本地开发日常中，无需打开浏览器即可利用已有的 ReviewAgent 与 TestAgent 沙箱闭环，拦截带有严重 Bug 或安全隐患的提交！
 
@@ -254,8 +308,28 @@ pnpm run install-to "D:/projects/my-other-project"
 ```bash
 node .git/hooks/pre-commit --push-check  # 手动查询与确认
 export FLOWDEV_DISABLE_PUSH=1            # 临时全局跳过推送检查
-git config flowdev.push_enabled false    # 本仓库关闭推送模式
+git config flowdev.pushmode false       # 本仓库关闭推送模式 (启用 = true / warn / disabled)
 ```
+
+### 📘 使用手册自动维护
+
+本项目使用 **“注释即文档”** 机制：所有用户可见的功能说明都写在对应源文件的顶部 `// == HANDBOOK: <id> == ... == /HANDBOOK ==` 注释块中，由 `docs/gen-handbook.js` 自动拼接生成 `docs/HANDBOOK.md`。
+
+```bash
+# 手动手册重新生成
+node docs/gen-handbook.js
+
+# 实际操作中：每次 git commit 时, hook 会自动重跑 gen-handbook.js
+# 所以 HANDBOOK.md 会随代码变动自动同步
+```
+
+包含在手册中的内容：
+- Push Mode 协议 (服务端推送 / 本地拉取 / ack / cancel)
+- Hook 自升级机制 (零运维部署)
+- Hook 版本端点 / 下载地址
+- CLI 子命令速查
+
+下次 commit 后查看 `docs/HANDBOOK.md` 即可看到最新内容。
 
 ### 姿势 B：在 Web 画布中审查外部项目并一键应用补丁
 1. 打开 FlowDev-AI 工作台 (`http://localhost:3000`)；
@@ -422,6 +496,19 @@ FEISHU_NOTIFY_ONLY_BLOCKED=true
 
 #### Q3: 为什么重构后的代码中新增了许多防御性判断？
 **答**：`ReviewAgent` 专职设计为严苛的应用安全专家，默认会依据最佳生产实践补充空指针防御、类型保护与枚举提取，旨在提高工业级代码的健壮度。可以在右侧属性抽屉中自定义修改 ReviewAgent 的 Prompt 模板以调整审查风格。
+
+#### Q4: 作为开发者，我需要打开 Web 控制台（http://localhost:3000）吗？
+**答**：**不需要。** 这是产品设计目标：开发者在 commit 时由本地 hook 完成所有必要动作（拉推送、AI 审查、严重问题拦截与修复）。Web 控制台只给**守门员**用（架构师 / 安全 / QA Lead）编辑规则、看审计、紧急广播。如果你不是守门员，请仅参考[开发者零交互承诺](#-开发者零交互承诺)章节。
+
+#### Q5: 我怎么知道守门员推送了新规则？
+**答**：你不需要主动查。当你 `git commit` 时 hook 会自动拉取服务端最新规则集并写入你的 IDE 规则文件（AGENTS.md / .cursorrules / SKILL.md 等 8 个）。重启 IDE 即可生效。
+
+#### Q6: commit 被 hook 拦截了怎么办？
+**答**：只需一条命令：
+```bash
+node .git/hooks/pre-commit --auto-fix --commit
+```
+hook 会调 AI 重写被拦的代码 + 重新扫描 + 通过后自动 git commit。
 
 ---
 
