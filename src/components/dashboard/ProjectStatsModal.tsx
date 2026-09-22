@@ -139,7 +139,7 @@ export function ProjectStatsModal() {
                 {projects.length}
                 <span className="text-xs font-normal text-slate-500 ml-1.5">个代码仓库</span>
               </div>
-              <div className="text-[11px] text-slate-500 mt-1">含 rxjs, flowdev-ai 等</div>
+              <div className="text-[11px] text-slate-500 mt-1">覆盖全部已接入仓库</div>
             </div>
 
             <div className="p-4 rounded-xl border border-slate-800 bg-slate-900/40">

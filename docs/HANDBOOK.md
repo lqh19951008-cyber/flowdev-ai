@@ -2,7 +2,7 @@
 
 > **核心承诺**: 守门员沉淀规则 → 团队开发者下次 git commit 自动同步 → 无需任何手动操作
 
-本手册由 `docs/gen-handbook.js` 自动从源代码注释生成。最后同步: hook v2.0.4 (sha:a6e979a3)
+本手册由 `docs/gen-handbook.js` 自动从源代码注释生成。最后同步: hook v2.0.7 (sha:8031838f)
 
 ## 📖 目录
 

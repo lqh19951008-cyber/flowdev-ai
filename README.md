@@ -174,11 +174,11 @@ FlowDev-AI 分为 **守门员面板（Web 可视化交互）** 与 **本地 CLI 
 在本地开发日常中，无需打开浏览器即可利用已有的 ReviewAgent 与 TestAgent 沙箱闭环，拦截带有严重 Bug 或安全隐患的提交！
 
 #### 1. 一键安装 Git 门禁钩子
-在项目根目录下运行：
+在 `flowdev-ai` 目录下运行，把门禁注入到你的业务仓库（flowdev-ai 自身不作为被审查项目）：
 ```bash
-pnpm run install-hook
+pnpm run install-to "D:/projects/my-project"
 ```
-该命令会自动在 `.git/hooks/pre-commit` 注册执行脚本，兼容 Windows Git Bash、macOS 与 Linux。
+该命令会自动在目标项目的 `.git/hooks/pre-commit` 注册执行脚本，兼容 Windows Git Bash、macOS 与 Linux。
 
 #### 2. 拦截与放行工作流程
 在日常执行 `git commit -m "..."` 时，钩子将自动触发：

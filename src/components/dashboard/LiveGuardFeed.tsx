@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   ShieldAlert,
   ShieldCheck,
@@ -330,18 +331,19 @@ export function LiveGuardFeed() {
             {/* Footer */}
             <div className="pt-2 border-t border-slate-200 dark:border-slate-800 flex justify-between items-center">
               <span className="text-[11px] text-slate-400 dark:text-slate-500">
-                最近 {recentEvents.length} 次审查记录
+                最近 {recentEvents?.length ?? 0} 次审查记录
               </span>
-              <button
+              <Link
+                href="/dashboard"
                 onClick={() => {
-                  setLiveFeedOpen(false);
-                  setActiveViewMode("dashboard");
+                  setLiveFeedOpen?.(false);
+                  setActiveViewMode?.("dashboard");
                 }}
                 className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 font-medium flex items-center gap-1"
               >
-                打开大盘查看全部
+                打开质量大门查看全部
                 <ExternalLink className="h-3 w-3" />
-              </button>
+              </Link>
             </div>
           </div>
         </div>

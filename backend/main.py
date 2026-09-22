@@ -75,6 +75,113 @@ app = FastAPI(
     description="Multi-agent code review, unit test generation, and sandbox self-correction backend.",
 )
 
+
+# ============================================================================
+# ============================================================================
+# 正则安全沙箱校验与默认 System Prompt 常量（AI 对话生成 Skill / Rule）
+# ----------------------------------------------------------------------------
+# 前端 "AuditChatSkillModal" 抽屉可通过 GET /api/rules/prompts 读取这些默认值，
+# 并在 synthesize / refine / dispatch-from-events 请求中通过可选字段
+# `system_prompt` 覆盖任一默认 prompt。
+# ============================================================================
+
+def validate_gatekeeper_regex(pattern: str) -> tuple[bool, str]:
+    """Validates that a regex pattern is safe, specific, and doesn't cause catastrophic backtracking or widespread false positives."""
+    if not pattern or not str(pattern).strip():
+        return False, "空正则表达式"
+    p = str(pattern).strip()
+
+    # Check for known catastrophic/overly broad patterns
+    if p in (r".*", r".+", r"\w+", r"\.\w+\.\w+\b", r"\.\w+\.\w+"):
+        return False, f"正则表达式 '{p}' 过于宽泛，会匹配任意代码属性调用导致大面积误报"
+
+    # Check for ReDoS risk or invalid regex syntax
+    try:
+        re.compile(p)
+    except re.error as e:
+        return False, f"正则表达式语法错误: {e}"
+
+    if len(p) < 4:
+        return False, f"正则表达式 '{p}' 过短，无法准确定位特定缺陷模式"
+
+    return True, "ok"
+
+
+DEFAULT_SYNTHESIZE_PROMPT = (
+    "你是一名世界顶尖的软件架构师与 DevSecOps 质量工程专家。\n"
+    "我们正在构建一套「缺陷拦截 -> 经验沉淀 -> 规则/Skill进化」的自闭环质量防护体系。\n"
+    "用户在提交代码时被 FlowDev 门禁拦截，请从此次代码缺陷中汲取教训，提炼出可预防未来同类缺陷的规则与 IDE Agent Skill。\n"
+    "【重要准则 - 规则分层与作用域隔离】：\n"
+    "1. 作用域划分 (scope): 必须精准标注属于 'frontend' (React/TS/Vue) 还是 'backend' (Python/FastAPI) 或 'security' / 'general'，并给出精确的文件匹配范围 (file_globs)。\n"
+    "2. 卡点类型分级 (check_type):\n"
+    "   - 若属于语法语义、深层属性访问、渲染健壮性等复杂场景，标记 check_type='ai_guideline'，此时 gate_rule.pattern 留空字符串（依靠 IDE AI 编码约束，杜绝脆弱正则误伤提交流程）。\n"
+    "   - 若属于硬编码密钥 (sk-)、eval/exec 危险执行、明文密码等高确信度安全模式，标记 check_type='static_regex'，并提供严谨的正则。\n"
+    "3. 新生成的 gate_rule.level 必须默认为 'warning'，防止未验证规则直接阻断提交流程。\n"
+    "必须直接输出严格合法的 JSON 代码块（```json ... ```）：\n"
+    "{\n"
+    '  "title": "规则标题 (如: React/TS 组件空值安全与可选链防御规范)",\n'
+    '  "category": "stability|security|performance|maintainability",\n'
+    '  "scope": "frontend|backend|security|general",\n'
+    '  "file_globs": ["src/**/*.{ts,tsx}"],\n'
+    '  "check_type": "ai_guideline|static_regex",\n'
+    '  "severity": "warning",\n'
+    '  "summary": "一句话核心指导原则与风险根因",\n'
+    '  "bad_snippet": "// ❌ 危险反例代码（带详细注释说明为何导致崩溃或风险）",\n'
+    '  "good_snippet": "// ✅ 规范正例代码（带详细防御性编程注释）",\n'
+    '  "skill_markdown": "专为 IDE AI 编程助手定制的 .cursorrules / SKILL.md 指令 Markdown，包含触发上下文、编码准则、正反示例",\n'
+    '  "gate_rule": {\n'
+    '    "title": "卡点规则名称",\n'
+    '    "pattern": "用于在 pre-commit 正则检测中静态拦截同类高危代码的正则表达式 (若 check_type=ai_guideline 则为空字符串)",\n'
+    '    "message": "门禁卡点拦截提示信息",\n'
+    '    "level": "warning"\n'
+    "  }\n"
+    "}"
+)
+
+DEFAULT_SYNTHESIZE_BATCH_PROMPT = (
+    "你是一名世界顶尖的软件架构师与 DevSecOps 质量工程专家。\n"
+    "我们正在构建一套「缺陷拦截 -> 经验沉淀 -> 规则/Skill进化」的自闭环质量防护体系。\n"
+    "守门员从 FlowDev 门禁拦截历史中勾选了 {count} 条事件, 这些事件可能存在同一个根因或同类风险。\n"
+    "请从这些事件的“共性”中提炼出 **一条** 能同时预防未来同类缺陷的统一规则与 IDE Agent Skill (不要给每条事件单独生成规则)。\n"
+    "【重要准则 - 规则分层与作用域隔离】：\n"
+    "1. 作用域划分 (scope): 标注 'frontend' | 'backend' | 'security' | 'general'，并给出 file_globs。\n"
+    "2. 卡点类型分级 (check_type): 仅高确信度的模式标记 'static_regex'，涉及深层语法分析与渲染的标记 'ai_guideline' 且 pattern 留空。\n"
+    "3. 规则覆盖范围应能同时应对所有选中事件中出现的同质缺陷。\n"
+    "4. gate_rule.level 默认为 'warning'。\n"
+    "必须直接输出严格合法的 JSON 代码块 (```json ... ```):\n"
+    "{\n"
+    '  "title": "规则标题",\n'
+    '  "category": "stability|security|performance|maintainability",\n'
+    '  "scope": "frontend|backend|security|general",\n'
+    '  "file_globs": ["src/**/*.{ts,tsx}"],\n'
+    '  "check_type": "ai_guideline|static_regex",\n'
+    '  "severity": "warning",\n'
+    '  "summary": "一句话核心指导原则与共同根因",\n'
+    '  "bad_snippet": "// ❌ 危险反例代码 (带详细注释说明为何崩溃)",\n'
+    '  "good_snippet": "// ✅ 规范正例代码 (覆盖所有选中事件的防御)",\n'
+    '  "skill_markdown": "专为 IDE AI 编程助手 (Cursor / Copilot / Claude Code / Antigravity) 定制的规则指令 Markdown, 包含触发上下文、编码准则、正反示例",\n'
+    '  "gate_rule": {\n'
+    '    "title": "卡点规则名称",\n'
+    '    "pattern": "用于在 pre-commit 正则检测中静态拦截同类高危代码的正则表达式 (若 check_type=ai_guideline 则为空字符串)",\n'
+    '    "message": "门禁卡点拦截提示信息",\n'
+    '    "level": "warning"\n'
+    "  },\n"
+    '  "source_events_count": "{count}",\n'
+    '  "common_root_cause": "对选中事件共同根因的一句话诊断"\n'
+    "}"
+)
+
+DEFAULT_REFINE_PROMPT = (
+    "你是一名世界顶尖的软件架构师与 DevSecOps 质量工程专家。\n"
+    "守门员正与你就上一轮提炼出的规则进行对话迭代修改。\n"
+    "你的任务: 严格保留上一轮规则的核心意图, 同时精准响应用户最新一轮的修改要求, 生成一个**新版完整 JSON 草稿**。\n"
+    "要求:\n"
+    "  1. 必须直接输出严格合法的 JSON 代码块 (```json ... ```)\n"
+    "  2. 字段与上一轮完全一致, 包含 title, category, scope, file_globs, check_type, severity, summary, bad_snippet, good_snippet, skill_markdown, gate_rule\n"
+    "  3. 若用户要求放宽卡点或避免误报，优先将 check_type 转为 'ai_guideline' 并清空 gate_rule.pattern\n"
+    "  4. 保持 gate_rule.level 默认为 'warning'\n"
+)
+
 import os
 
 ALLOWED_ORIGINS = [
@@ -150,6 +257,22 @@ async def cli_scan(payload: CliScanRequest):
     )
 
 
+@app.get("/api/rules/prompts")
+async def get_default_prompts():
+    """Return the current default System Prompts used by the AI skill generator.
+
+    The "AuditChatSkillModal" drawer fetches these on open so a gatekeeper can
+    review (and optionally override) the built-in prompts before chattering with
+    the LLM. Overrides are sent back via the `system_prompt` field on
+    synthesize / refine / dispatch-from-events.
+    """
+    return {
+        "synthesize": DEFAULT_SYNTHESIZE_PROMPT,
+        "synthesize_batch": DEFAULT_SYNTHESIZE_BATCH_PROMPT,
+        "refine": DEFAULT_REFINE_PROMPT,
+    }
+
+
 @app.post("/api/rules/refine")
 async def refine_rule_with_chat(request: Request):
     """Conversational refinement endpoint.
@@ -190,21 +313,8 @@ async def refine_rule_with_chat(request: Request):
     if not previous_rule.get("title"):
         raise HTTPException(status_code=400, detail="'previous_rule.title' required")
 
-    sys_prompt = (
-        "你是一名世界顶尖的软件架构师与 DevSecOps 质量工程专家。\n"
-        "守门员正与你就上一轮提炼出的规则进行对话迭代修改。\n"
-        "你的任务: 严格保留上一轮规则的核心意图, 同时精准响应用户最新一轮的修改要求, 生成一个**新版完整 JSON 草稿**。\n"
-        "要求:\n"
-        "  1. 必须直接输出严格合法的 JSON 代码块 (```json ... ```)\n"
-        "  2. 字段与上一轮完全一致, 不丢字段\n"
-        "  3. 用户可能要求:\n"
-        "     - 改换示例语言 (TypeScript → Python)\n"
-        "     - 调整粒度 (更宽松/更严苛)\n"
-        "     - 增加具体场景 (e.g. 仅限 SQL 注入)\n"
-        "     - 改述门禁卡点正则\n"
-        "     - 重写 skill_markdown 为别的格式\n"
-        "  4. 始终保留 bad_snippet / good_snippet / skill_markdown / gate_rule 四个字段\n"
-    )
+    # 可选：前端可传入 system_prompt 覆盖默认 refine prompt
+    sys_prompt = payload.get("system_prompt") or DEFAULT_REFINE_PROMPT
 
     history = [previous_rule.get("title")]
     user_msg = messages_in[-1].get("content", "") if isinstance(messages_in[-1], dict) else ""
@@ -333,6 +443,246 @@ async def apply_rule_to_batch(request: Request):
     return {"applied": sum(1 for r in results if r["ok"]), "results": results}
 
 
+@app.post("/api/rules/dispatch-from-events")
+async def dispatch_rule_from_events(request: Request):
+    """One-shot endpoint: selected events → AI chat refinement → apply → push.
+
+    Powers the "AI 对话生成对应 Skill 下发" feature in the audit dashboard.
+    The gatekeeper flow is:
+
+      1. **Pick events**: select 1+ rows from "全员提交拦截与审计流水".
+      2. **AI chat**: send natural-language refinements ("make it Python only",
+         "loosen the regex", "add React examples"). Each turn calls the
+         underlying /api/rules/refine endpoint with the full conversation.
+      3. **Apply & Push**: when satisfied, click "下发到全员" — this endpoint
+         atomically applies the final rule to every selected project AND stages
+         a pending push so every local Git hook prompts the developer with
+         `Y/n` on their next commit.
+
+    Request body:
+      {
+        "events": [ScanEventItem, ...],     # selected audit events
+        "messages": [ChatMsg, ...],          # chat history (last item = latest user turn)
+        "current_rule": { ... },             # optional, latest rule draft
+        "project_ids": ["rxjs", "flowdev-ai"],
+        "push_immediately": True,
+        "language": "typescript"
+      }
+
+    Response: { rule, applied, push_states, audit_summary }
+    """
+    try:
+        payload = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON body: {e!s}")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Body must be a JSON object")
+
+    events = payload.get("events") or []
+    messages = payload.get("messages") or []
+    current_rule = payload.get("current_rule") or {}
+    project_ids = payload.get("project_ids") or []
+    push_immediately = bool(payload.get("push_immediately", True))
+    language = payload.get("language") or "typescript"
+    system_prompt = payload.get("system_prompt") or ""
+
+    if not isinstance(events, list) or len(events) == 0:
+        raise HTTPException(status_code=400, detail="'events' must be a non-empty list")
+    if not isinstance(project_ids, list) or len(project_ids) == 0:
+        raise HTTPException(status_code=400, detail="'project_ids' must be a non-empty list")
+
+    # ---------- Step 1: synthesize the initial rule ----------
+    # If the caller already has a current_rule (chat-iterated), reuse it. Otherwise
+    # synthesize from the aggregated events so the chat always has a baseline to
+    # work with.
+    rule: Optional[Dict[str, Any]] = None
+    if current_rule.get("title") and current_rule.get("good_snippet"):
+        rule = dict(current_rule)
+    else:
+        synthesized = await _synthesize_from_events(
+            project_id=str(project_ids[0]),
+            events=events,
+            language=language,
+        )
+        if isinstance(synthesized, dict):
+            rule = synthesized
+
+    if not rule:
+        raise HTTPException(status_code=500, detail="Failed to synthesize base rule")
+
+    # ---------- Step 2: chat refinement ----------
+    # Each chat turn = an /api/rules/refine call. We replay the whole conversation
+    # so the LLM sees both the audit context AND the user's natural-language
+    # direction.
+    if isinstance(messages, list) and len(messages) > 0 and current_rule.get("title"):
+        # Build the same shape /api/rules/refine expects
+        refine_payload = {
+            "previous_rule": rule,
+            "messages": messages,
+            "context": {
+                "project_ids": project_ids,
+                "events": [
+                    {
+                        "filename": (ev.get("files") or [{}])[0].get("filename", "unknown")
+                            if isinstance(ev, dict) else "unknown",
+                        "critical_issues": ev.get("critical_issues", []) if isinstance(ev, dict) else [],
+                        "suggestions": ev.get("suggestions", []) if isinstance(ev, dict) else [],
+                    }
+                    for ev in events if isinstance(ev, dict)
+                ],
+            },
+        }
+        try:
+            sys_prompt = (
+                "你是一名世界顶尖的软件架构师与 DevSecOps 质量工程专家。\n"
+                "守门员正与你就上一轮提炼出的规则进行对话迭代修改。\n"
+                "你的任务: 严格保留上一轮规则的核心意图, 同时精准响应用户最新一轮的修改要求, 生成一个**新版完整 JSON 草稿**。\n"
+                "要求:\n"
+                "  1. 必须直接输出严格合法的 JSON 代码块 (```json ... ```)\n"
+                "  2. 字段与上一轮完全一致, 不丢字段\n"
+                "  3. 用户可能要求: 改换语言 / 调整粒度 / 增加场景 / 改述门禁正则 / 重写 skill_markdown\n"
+                "  4. 始终保留 bad_snippet / good_snippet / skill_markdown / gate_rule 四个字段\n"
+            )
+            history = [rule.get("title")]
+            user_msg = messages[-1].get("content", "") if isinstance(messages[-1], dict) else ""
+            history.append(f"用户最新修改要求: {user_msg}")
+            user_prompt = (
+                f"上一轮规则 JSON:\n```json\n{json.dumps(rule, ensure_ascii=False, indent=2)}```\n\n"
+                f"对话历史 (旧 → 新):\n"
+                + "\n".join(
+                    f"  [{m.get('role', '?')}] {m.get('content', '')[:400]}"
+                    for m in messages if isinstance(m, dict)
+                )
+                + "\n\n"
+                f"项目上下文: {json.dumps(refine_payload['context'], ensure_ascii=False)[:800]}\n\n"
+                "请生成新版 JSON 草稿, 只输出 ```json ... ``` 代码块。"
+            )
+            chat_msgs = [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+            if settings.has_api_key:
+                try:
+                    chunks: List[str] = []
+                    async for token in LLMService.stream_chat(chat_msgs, temperature=0.3):
+                        chunks.append(token)
+                    full_response = "".join(chunks)
+                    data = extract_json_object(full_response)
+                    if isinstance(data, dict) and "title" in data and "good_snippet" in data:
+                        data.setdefault("source_events", rule.get("source_events", len(events)))
+                        data.setdefault("source_files", rule.get("source_files", []))
+                        data.setdefault("common_root_cause", rule.get("common_root_cause", ""))
+                        data["_refined"] = True
+                        rule = data
+                except Exception as err:
+                    logger.warning(f"dispatch chat-refine failed, keeping current rule: {err}")
+        except Exception as e:
+            logger.warning(f"dispatch chat-refine outer error: {e}")
+
+    # ---------- Step 3: apply & push to all selected projects ----------
+    apply_results: List[Dict[str, Any]] = []
+    push_states: List[Dict[str, Any]] = []
+    applied_count = 0
+    for pid in project_ids:
+        if not isinstance(pid, str) or not pid.strip():
+            continue
+        clean_id = pid.strip()
+        try:
+            existing = DatabaseService.get_project_policy(clean_id) or {}
+            skills = existing.get("skills") or []
+            gate_rules = existing.get("gate_rules") or []
+            skill_entry = {
+                "id": f"dispatch-{int(__import__('time').time() * 1000)}",
+                "title": rule.get("title"),
+                "category": rule.get("category", "stability"),
+                "summary": rule.get("summary", ""),
+                "skill_markdown": rule.get("skill_markdown", ""),
+                "source": "audit_chat_dispatch",
+                "source_events": rule.get("source_events", len(events)),
+                "source_files": rule.get("source_files", []),
+            }
+            new_skills = [s for s in skills if s.get("title") != skill_entry["title"]]
+            new_skills.append(skill_entry)
+            gate_entry = (rule.get("gate_rule") or {})
+            new_gate_rules = [g for g in gate_rules if g.get("title") != gate_entry.get("title")]
+            if gate_entry.get("title"):
+                new_gate_rules.append(gate_entry)
+            new_policy = dict(existing)
+            new_policy["skills"] = new_skills
+            new_policy["gate_rules"] = new_gate_rules
+            # Also mirror into agent_skills + custom_rules so the dashboard reflects it.
+            new_policy["agent_skills"] = new_skills
+            new_policy["custom_rules"] = new_gate_rules
+            DatabaseService.update_project_policy(clean_id, new_policy)
+
+            push_state = {"pending": False, "version": None}
+            if push_immediately:
+                try:
+                    push_state = await _broadcast_policy_change(
+                        clean_id,
+                        reason=f"全员 Skill 下发: {rule.get('title', '')[:60]}",
+                    )
+                except Exception as e:
+                    logger.warning(f"broadcast policy change failed for {clean_id}: {e}")
+
+            # Compute push state from DB after broadcast.
+            ps = DatabaseService.get_project_push_state(clean_id)
+            push_states.append({
+                "project_id": clean_id,
+                "policy_version": ps.get("policy_version"),
+                "pending_push_version": ps.get("pending_push_version"),
+                "push_enabled": ps.get("push_enabled"),
+                "pending": ps.get("pending"),
+                "last_pushed_at": ps.get("last_pushed_at"),
+            })
+            apply_results.append({
+                "project_id": clean_id,
+                "ok": True,
+                "skill_id": skill_entry["id"],
+                "pushed": bool(ps.get("pending_push_version")),
+            })
+            applied_count += 1
+
+            # Broadcast an SSE event so the audit dashboard can show "this skill
+            # was just dispatched" alongside real-time commit events.
+            try:
+                await EventBus.broadcast("rule_pushed", {
+                    "project_id": clean_id,
+                    "version": ps.get("policy_version"),
+                    "reason": f"全员 Skill 下发: {rule.get('title', '')[:60]}",
+                    "push_state": ps,
+                    "source": "audit_chat_dispatch",
+                })
+            except Exception as e:
+                logger.debug(f"broadcast event failed: {e}")
+        except Exception as e:
+            apply_results.append({
+                "project_id": clean_id,
+                "ok": False,
+                "error": f"{e!s}",
+            })
+
+    # Build audit summary describing what was just dispatched (used by the UI toast).
+    audit_summary = {
+        "rule_title": rule.get("title"),
+        "category": rule.get("category"),
+        "source_events": rule.get("source_events", len(events)),
+        "committers_distinct": len({
+            (ev.get("committer") or "unknown") for ev in events if isinstance(ev, dict)
+        }),
+        "projects_targeted": applied_count,
+        "all_pushed": all(r.get("pushed") for r in apply_results if r.get("ok")) if applied_count > 0 else False,
+    }
+    return {
+        "success": applied_count > 0,
+        "rule": rule,
+        "applied": applied_count,
+        "results": apply_results,
+        "push_states": push_states,
+        "audit_summary": audit_summary,
+    }
+
+
 @app.post("/api/cli/apply-suggestions", response_model=CliApplySuggestionsResponse)
 async def cli_apply_suggestions(request: Request):
     """AI-powered code refactoring endpoint. Hook calls this with the original
@@ -416,7 +766,15 @@ async def delete_project(project_id: str):
     if not clean_id:
         raise HTTPException(status_code=400, detail="Invalid project_id")
     deleted = DatabaseService.delete_project(clean_id)
-    return {"success": deleted, "project_id": clean_id}
+    return {
+        "success": deleted,
+        "project_id": clean_id,
+        "soft_deleted": deleted,
+        "hint": (
+            "项目已软删除并写入墓碑记录。本地仍装有 FlowDev 钩子的仓库下次提交时将自动放行。"
+            "如需彻底卸载本地钩子: node scripts/uninstall-from.js <仓库路径>。"
+        ),
+    }
 
 
 
@@ -432,10 +790,49 @@ async def list_all_recent_events(limit: int = 30):
     return DatabaseService.list_recent_events(project_id=None, limit=limit)
 
 
+@app.get("/api/audit/committers")
+async def list_committers_leaderboard(days: int = 30, limit: int = 50):
+    """Aggregated per-committer audit metrics for the "全员提交拦截与审计流水" dashboard.
+
+    Powers the "提交人质量排行" panel: shows every developer who has triggered the
+    pre-commit gatekeeper in the last `days` days, with their commit count, blocked
+    count, pass rate, top files, last seen, and a derived risk score.
+
+    Risk score (0-100, higher = riskier):
+      - 50% weight on block ratio: (blocked / total) * 100 * 0.5
+      - 30% weight on raw block volume: min(blocked, 20) / 20 * 30
+      - 20% weight on recency: 20 if blocked in last 24h, decaying by days
+
+    The leaderboard is the data source behind the "全员提交拦截" feature that lets
+    the gatekeeper see WHO needs coaching and which projects / files are the source
+    of repeated defects — the prerequisite for selecting events to feed into the
+    AI chat-based skill generator.
+    """
+    return DatabaseService.list_committers_leaderboard(days=days, limit=limit)
+
+
+@app.get("/api/audit/committers/{committer}")
+async def list_committer_events(committer: str, days: int = 30, limit: int = 50):
+    """Detailed audit log filtered by committer identity.
+
+    The URL segment is the raw committer string as recorded by Git
+    (e.g. `alice <alice@corp.com>`). The route is best-effort: if the
+    committer has no events it returns an empty list. Use the leaderboard
+    endpoint first to discover available committers.
+    """
+    raw = (committer or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="committer is required")
+    decoded = __import__("urllib.parse").parse.unquote(raw)
+    return DatabaseService.list_committer_events(decoded, days=days, limit=limit)
+
+
 @app.get("/api/projects/{project_id}/policy")
 async def get_project_policy(project_id: str):
     """Retrieves the quality gate policy and synthesized rules/skills for a project."""
     policy = DatabaseService.get_project_policy(project_id)
+    if policy is None:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found or has been removed")
     return {
         "project_id": project_id,
         "policy": policy,
@@ -556,11 +953,12 @@ async def synthesize_rule_and_skill(request: Request):
         raise HTTPException(status_code=400, detail="Body must be a JSON object")
     project_id = payload.get("project_id", "default")
     language = payload.get("language", "typescript")
+    system_prompt = payload.get("system_prompt") or ""
 
     # === Batch mode: aggregate multiple scan events into one unified rule ===
     events = payload.get("events") or []
     if events and isinstance(events, list) and len(events) > 0:
-        return await _synthesize_from_events(project_id, events, language)
+        return await _synthesize_from_events(project_id, events, language, system_prompt)
 
     # === Single event mode (legacy backward-compatible) ===
     critical_issues = payload.get("critical_issues", [])
@@ -574,27 +972,7 @@ async def synthesize_rule_and_skill(request: Request):
 
     # 1. Attempt LLM synthesis if API key is configured
     if settings.has_api_key:
-        sys_prompt = (
-            "你是一名世界顶尖的软件架构师与 DevSecOps 质量工程专家。\n"
-            "我们正在构建一套「缺陷拦截 -> 经验沉淀 -> 规则/Skill进化」的自闭环质量防护体系。\n"
-            "用户在提交代码时被 FlowDev 门禁拦截，请从此次代码缺陷中汲取教训，提炼出可预防未来同类缺陷的规则与 IDE Agent Skill。\n"
-            "必须直接输出严格合法的 JSON 代码块（```json ... ```）：\n"
-            "{\n"
-            '  "title": "规则标题 (如: 可选链防御与空指针安全访问规范)",\n'
-            '  "category": "stability",\n'
-            '  "severity": "critical",\n'
-            '  "summary": "一句话核心指导原则与风险根因",\n'
-            '  "bad_snippet": "// ❌ 危险反例代码（带详细注释说明为何导致崩溃或风险）",\n'
-            '  "good_snippet": "// ✅ 规范正例代码（带详细防御性编程注释）",\n'
-            '  "skill_markdown": "专为 IDE AI 编程助手（Cursor / Copilot / Claude Code / Antigravity）定制的 .cursorrules / SKILL.md 规则指令 Markdown，包含触发上下文、编码准则、正反示例",\n'
-            '  "gate_rule": {\n'
-            '    "title": "卡点规则名称",\n'
-            '    "pattern": "用于在 pre-commit 正则检测中静态拦截同类高危代码的正则表达式",\n'
-            '    "message": "门禁卡点拦截提示信息",\n'
-            '    "level": "critical"\n'
-            '  }\n'
-            "}"
-        )
+        sys_prompt = system_prompt or DEFAULT_SYNTHESIZE_PROMPT
         user_prompt = (
             f"目标仓库: {project_id}\n"
             f"目标文件: {filename}\n"
@@ -618,6 +996,22 @@ async def synthesize_rule_and_skill(request: Request):
             full_response = "".join(chunks)
             data = extract_json_object(full_response)
             if isinstance(data, dict) and "title" in data and "good_snippet" in data:
+                scope = data.get("scope") or ("frontend" if any(x in str(language).lower() for x in ("ts", "js", "react")) else "backend" if "py" in str(language).lower() else "general")
+                data["scope"] = scope
+                data.setdefault("file_globs", ["src/**/*.{ts,tsx}"] if scope == "frontend" else ["backend/**/*.py"] if scope == "backend" else ["**/*"])
+                
+                gate_rule = data.get("gate_rule") or {}
+                pattern = str(gate_rule.get("pattern") or "").strip()
+                is_safe, err_msg = validate_gatekeeper_regex(pattern)
+                if not is_safe:
+                    data["check_type"] = "ai_guideline"
+                    gate_rule["pattern"] = ""
+                    gate_rule["message"] = f"(已转为 IDE 软约束 · 原始正则已安全降级: {err_msg})"
+                else:
+                    data.setdefault("check_type", "static_regex")
+                
+                gate_rule["level"] = "warning"
+                data["gate_rule"] = gate_rule
                 data["source_events"] = 1
                 return data
         except Exception as err:
@@ -630,22 +1024,28 @@ async def synthesize_rule_and_skill(request: Request):
         return {
             "title": "防御性可选链与空指针安全防护规范",
             "category": "stability",
-            "severity": "critical",
+            "scope": "frontend",
+            "file_globs": ["src/**/*.{ts,tsx}", "**/*.js"],
+            "check_type": "ai_guideline",
+            "severity": "warning",
             "summary": "禁止对深层对象或外部输入进行未经校验的解构和直接链式访问，必须使用可选链（?.）与空值合并运算符（??）。",
             "bad_snippet": "// ❌ 危险反例：未校验对象可能为空，直接进行属性深层访问，易引发 TypeError: Cannot read properties of undefined\nconst userEmail = response.data.user.profile.email;\nconst amount = order.payment.details.amount;\nprocessPayment(amount.toFixed(2));",
             "good_snippet": "// ✅ 规范正例：使用可选链与空值合并运算符，安全降级，防御不可预期空值\nconst userEmail = response?.data?.user?.profile?.email ?? 'unregistered@example.com';\nconst amount = order?.payment?.details?.amount;\nif (typeof amount === 'number') {\n  processPayment(amount.toFixed(2));\n} else {\n  logger.warn('Missing payment amount, fallback to safe flow.');\n}",
             "skill_markdown": "# Skill: Defensive Optional Chaining & Null Safety\n\n## Context\nWhen writing JavaScript / TypeScript code that accesses external API payloads, nested state, or optional parameters, avoid direct chaining that causes runtime crashes.\n\n## Guidelines for AI Coding Assistants\n1. **Always use optional chaining (`?.`)** when traversing 2+ levels deep into objects that may be undefined.\n2. **Provide safe fallbacks with `??`** (nullish coalescing) instead of assuming values always exist.\n3. **Perform guard clauses** early in handler functions (`if (!payload) return;`).\n4. **Do not use dangerous type assertions** (`as any` or `!`) to bypass compiler type checks.\n\n## Example\n```typescript\n// Safe access pattern\nconst total = cart?.summary?.totalAmount ?? 0;\n```\n",
             "gate_rule": {
                 "title": "未防御的深层属性访问与空对象引用",
-                "pattern": r"\b(null|undefined)\.[a-zA-Z0-9_]+",
-                "message": "检测到针对 null/undefined 的直接属性访问，请使用可选链 (?.) 或显式判空防御！",
-                "level": "critical",
+                "pattern": "",
+                "message": "检测到针对 null/undefined 的潜在访问隐患，请确保遵循 IDE 可选链防范守则",
+                "level": "warning",
             },
         }
     elif "eval" in full_text or "exec" in full_text or "代码执行" in full_text or "injection" in full_text or "sql" in full_text:
         return {
             "title": "杜绝危险动态执行与代码注入防御规范",
             "category": "security",
+            "scope": "security",
+            "file_globs": ["**/*"],
+            "check_type": "static_regex",
             "severity": "critical",
             "summary": "严禁在业务逻辑中调用 eval()、exec() 或未参数化的 SQL 字符串拼接，消除远程代码执行（RCE）与注入风险。",
             "bad_snippet": "// ❌ 危险反例：动态解析不可信输入，或拼接 SQL 语句\neval('const result = ' + userInput);\nconst query = 'SELECT * FROM users WHERE id = ' + userId;",
@@ -655,13 +1055,16 @@ async def synthesize_rule_and_skill(request: Request):
                 "title": "高危动态执行与注入函数检测",
                 "pattern": r"\b(eval|exec)\s*\(",
                 "message": "严禁使用 eval() 或 exec() 危险动态执行函数！",
-                "level": "critical",
+                "level": "warning",
             },
         }
     elif "key" in full_text or "secret" in full_text or "token" in full_text or "凭证" in full_text or "密钥" in full_text:
         return {
             "title": "敏感凭据与 API Key 防泄露隔离规范",
             "category": "security",
+            "scope": "security",
+            "file_globs": ["**/*"],
+            "check_type": "static_regex",
             "severity": "critical",
             "summary": "严禁在源代码中硬编码 API Key、Access Token、私钥或密码，所有敏感凭证必须通过环境变量注入。",
             "bad_snippet": "// ❌ 危险反例：直接硬编码敏感密钥提交至版本库\nconst OPENAI_KEY = 'sk-proj-xxxxxxxxxxxxxxxxxxxxxx';\nconst DB_PASS = 'ProdSuperSecret123!';",
@@ -671,28 +1074,31 @@ async def synthesize_rule_and_skill(request: Request):
                 "title": "硬编码凭证与密钥拦截",
                 "pattern": r"(sk-[a-zA-Z0-9_\-]{20,}|AKIA[0-9A-Z]{16})",
                 "message": "检测到硬编码敏感密钥或凭据，严禁提交至版本控制库！",
-                "level": "critical",
+                "level": "warning",
             },
         }
     else:
         return {
             "title": f"代码健壮性与边界防御规范 ({project_id})",
             "category": "stability",
-            "severity": "critical",
+            "scope": "general",
+            "file_globs": ["**/*"],
+            "check_type": "ai_guideline",
+            "severity": "warning",
             "summary": f"针对近期门禁拦截的质量隐患，建立前置校验与防御性编程准则。",
             "bad_snippet": f"// ❌ 历史拦截隐患:\n// {issues_text}\n// 未进行异常防护或边界条件处理",
             "good_snippet": "// ✅ 规范正例: 完善边界防御与类型保护\ntry {\n  // 稳健的核心业务执行逻辑\n} catch (error) {\n  logger.error('Safe recovery from error:', error);\n}",
             "skill_markdown": f"# Skill: Defensive Programming Standard for {project_id}\n\n## Context\nHistorical gatekeeper scan intercepted defects: {issues_text}.\n\n## Guidelines for AI Coding Assistants\n1. Always validate inputs at the public interface boundary.\n2. Handle error states gracefully without crashing the runtime.\n3. Provide unit test coverage for edge cases.\n",
             "gate_rule": {
                 "title": "通用健壮性与边界防御规则",
-                "pattern": r"\b(throw\s+new\s+Error|assert\s+False)",
-                "message": "请确认异常抛出逻辑具备完整的错误捕获与日志记录",
+                "pattern": "",
+                "message": "请遵循通用防御性编程准则",
                 "level": "warning",
             },
         }
 
 
-async def _synthesize_from_events(project_id: str, events: List[Dict[str, Any]], language: str) -> Dict[str, Any]:
+async def _synthesize_from_events(project_id: str, events: List[Dict[str, Any]], language: str, system_prompt: str = "") -> Dict[str, Any]:
     """Batch-mode synthesis: aggregate N scan events into ONE unified rule.
 
     Used when a gatekeeper selects multiple related scan events in the UI
@@ -735,30 +1141,9 @@ async def _synthesize_from_events(project_id: str, events: List[Dict[str, Any]],
 
     # --- LLM path (preferred) ---
     if settings.has_api_key:
-        sys_prompt = (
-            "你是一名世界顶尖的软件架构师与 DevSecOps 质量工程专家。\n"
-            "我们正在构建一套「缺陷拦截 -> 经验沉淀 -> 规则/Skill进化」的自闭环质量防护体系。\n"
-            f"守门员从 FlowDev 门禁拦截历史中勾选了 {len(event_summaries)} 条事件, 这些事件可能存在同一个根因或同类风险。\n"
-            "请从这些事件的“共性”中提炼出 **一条** 能同时预防未来同类缺陷的统一规则与 IDE Agent Skill (不要给每条事件单独生成规则)。\n"
-            "**关键要求**: 提炼出的规则的覆盖范围应能同时应对所有选中事件中出现的同质缺陷。\n"
-            "必须直接输出严格合法的 JSON 代码块 (```json ... ```):\n"
-            "{\n"
-            '  "title": "规则标题",\n'
-            '  "category": "stability|security|performance|maintainability",\n'
-            '  "severity": "critical|warning|info",\n'
-            '  "summary": "一句话核心指导原则与共同根因",\n'
-            '  "bad_snippet": "// ❌ 危险反例代码 (带详细注释说明为何崩溃)",\n'
-            '  "good_snippet": "// ✅ 规范正例代码 (覆盖所有选中事件的防御)",\n'
-            '  "skill_markdown": "专为 IDE AI 编程助手 (Cursor / Copilot / Claude Code / Antigravity) 定制的 .cursorrules / SKILL.md 规则指令 Markdown, 包含触发上下文、编码准则、正反示例",\n'
-            '  "gate_rule": {\n'
-            '    "title": "卡点规则名称",\n'
-            '    "pattern": "用于在 pre-commit 正则检测中静态拦截同类高危代码的正则表达式 (覆盖所有选中事件)",\n'
-            '    "message": "门禁卡点拦截提示信息",\n'
-            '    "level": "critical|warning|info"\n'
-            '  },\n'
-            '  "source_events_count": ' + str(len(event_summaries)) + ',\n'
-            '  "common_root_cause": "对选中事件共同根因的一句话诊断"\n'
-            "}"
+        # 前端可传入 system_prompt 覆盖默认；默认模板中的 {count} 用实际选中事件数替换
+        sys_prompt = (system_prompt or DEFAULT_SYNTHESIZE_BATCH_PROMPT).replace(
+            "{count}", str(len(event_summaries))
         )
         user_prompt = (
             f"目标仓库: {project_id}\n"
@@ -781,6 +1166,22 @@ async def _synthesize_from_events(project_id: str, events: List[Dict[str, Any]],
             full_response = "".join(chunks)
             data = extract_json_object(full_response)
             if isinstance(data, dict) and "title" in data and "good_snippet" in data:
+                scope = data.get("scope") or ("frontend" if any(x in str(language).lower() for x in ("ts", "js", "react")) else "backend" if "py" in str(language).lower() else "general")
+                data["scope"] = scope
+                data.setdefault("file_globs", ["src/**/*.{ts,tsx}"] if scope == "frontend" else ["backend/**/*.py"] if scope == "backend" else ["**/*"])
+                
+                gate_rule = data.get("gate_rule") or {}
+                pattern = str(gate_rule.get("pattern") or "").strip()
+                is_safe, err_msg = validate_gatekeeper_regex(pattern)
+                if not is_safe:
+                    data["check_type"] = "ai_guideline"
+                    gate_rule["pattern"] = ""
+                    gate_rule["message"] = f"(已转为 IDE 软约束 · 原始正则已安全降级: {err_msg})"
+                else:
+                    data.setdefault("check_type", "static_regex")
+                
+                gate_rule["level"] = "warning"
+                data["gate_rule"] = gate_rule
                 # Always overwrite aggregate metadata so the caller sees the true count
                 data["source_events"] = len(event_summaries)
                 data["source_files"] = list(set(filenames))
@@ -796,7 +1197,10 @@ async def _synthesize_from_events(project_id: str, events: List[Dict[str, Any]],
         return {
             "title": "防御性可选链与空指针安全防护规范",
             "category": "stability",
-            "severity": "critical",
+            "scope": "frontend",
+            "file_globs": ["src/**/*.{ts,tsx}", "**/*.js"],
+            "check_type": "ai_guideline",
+            "severity": "warning",
             "summary": f"聚合自 {len(event_summaries)} 条事件的共同根因: 未对深层对象做空值校验直接属性访问, 运行时崩溃。",
             "bad_snippet": "// ❌ 未校验直接属性访问, 触发 TypeError\nconst userName = response.data.user.profile.name;",
             "good_snippet": "// ✅ 可选链 + 空值合并, 安全降级\nconst userName = response?.data?.user?.profile?.name ?? 'anonymous';",
@@ -812,9 +1216,9 @@ async def _synthesize_from_events(project_id: str, events: List[Dict[str, Any]],
             ),
             "gate_rule": {
                 "title": "未防御的深层属性访问与空对象引用",
-                "pattern": r"\b(null|undefined)\.[a-zA-Z0-9_]+",
-                "message": "检测到直接对 null/undefined 做属性访问, 请使用可选链 (?.) 或显式判空",
-                "level": "critical",
+                "pattern": "",
+                "message": "检测到针对深层属性的直接引用，请遵循 IDE 可选链防范守则",
+                "level": "warning",
             },
             "source_events": len(event_summaries),
             "source_files": list(set(filenames)),
@@ -824,6 +1228,9 @@ async def _synthesize_from_events(project_id: str, events: List[Dict[str, Any]],
     return {
         "title": f"聚合规则: 来自 {len(event_summaries)} 条事件的共性防御",
         "category": "stability",
+        "scope": "general",
+        "file_globs": ["**/*"],
+        "check_type": "ai_guideline",
         "severity": "warning",
         "summary": f"对 {len(event_summaries)} 条事件的统一防御建议 (LLM 未配置, 使用启发式 fallback)。",
         "bad_snippet": "// ❌ 未提供 (heuristic fallback)",
@@ -831,8 +1238,8 @@ async def _synthesize_from_events(project_id: str, events: List[Dict[str, Any]],
         "skill_markdown": f"# 聚合防御规范\n\n该规则由 {len(event_summaries)} 条事件聚合生成, 建议手动完善。\n\n## 涉及的缺陷\n" + "\n".join(f"- {x}" for x in all_critical[:10]) + "\n",
         "gate_rule": {
             "title": "聚合启发式门禁",
-            "pattern": r".*",
-            "message": "聚合规则触发, 请人工 review",
+            "pattern": "",
+            "message": "聚合质量规范，请遵循团队通用编码准则",
             "level": "warning",
         },
         "source_events": len(event_summaries),
@@ -1009,6 +1416,7 @@ async def get_sync_status(project_id: str, local_version: Optional[str] = None):
         "last_pushed_at": state["last_pushed_at"],
         "last_applied_at": state["last_applied_at"],
         "last_applied_version": state["last_applied_version"],
+        "deleted": state.get("deleted", False),
     }
 
 
@@ -1023,6 +1431,9 @@ async def trigger_push(project_id: str, request: Request):
     payload = await _read_json_body(request)
     reason = (payload.get("reason") or "Web 控制台手动推送").strip()[:200]
     force = bool(payload.get("force", False))
+
+    if not DatabaseService.get_project(project_id):
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found or has been removed")
 
     state = DatabaseService.get_project_push_state(project_id)
     if not state["push_enabled"] and not force:
@@ -1125,6 +1536,35 @@ async def set_push_enabled(project_id: str, request: Request):
     return {"success": True, "project_id": project_id, "push_state": state}
 
 
+def _group_skills_by_scope(agent_skills: list) -> dict:
+    grouped = {
+        "security": [],
+        "frontend": [],
+        "backend": [],
+        "general": []
+    }
+    for s in agent_skills:
+        if not isinstance(s, dict):
+            continue
+        scope = str(s.get("scope") or "").lower()
+        category = str(s.get("category") or "").lower()
+        title = str(s.get("title") or "")
+        summary = str(s.get("summary") or "")
+        full = f"{title} {summary} {category}".lower()
+
+        if scope in grouped:
+            grouped[scope].append(s)
+        elif "security" in category or "sql" in full or "exec" in full or "eval" in full or "密钥" in full or "token" in full or "rce" in full:
+            grouped["security"].append(s)
+        elif "react" in full or "ts" in full or "tsx" in full or "component" in full or "hook" in full or "vue" in full:
+            grouped["frontend"].append(s)
+        elif "python" in full or "fastapi" in full or "backend" in full or "django" in full:
+            grouped["backend"].append(s)
+        else:
+            grouped["general"].append(s)
+    return grouped
+
+
 @app.get("/api/projects/{project_id}/skills/export")
 async def export_project_skills(
     project_id: str,
@@ -1145,17 +1585,25 @@ async def export_project_skills(
     """
     policy = DatabaseService.get_project_policy(project_id) or {}
     custom_rules = policy.get("custom_rules", [])
-    agent_skills = policy.get("agent_skills", [])
+    agent_skills = policy.get("agent_skills") or policy.get("skills") or []
+
+    # Clean out empty/dangerous regex patterns from custom rules
+    valid_custom_rules = [
+        r for r in custom_rules
+        if isinstance(r, dict) and r.get("pattern") and str(r.get("pattern")).strip()
+        and str(r.get("pattern")).strip() not in (r".*", r".+", r"\w+", r"\.\w+\.\w+\b", r"\.\w+\.\w+")
+    ]
 
     if format == "json":
         return {
             "project_id": project_id,
-            "custom_rules": custom_rules,
+            "custom_rules": valid_custom_rules,
             "agent_skills": agent_skills,
             "count": len(agent_skills),
         }
 
     lines = []
+    grouped_skills = _group_skills_by_scope(agent_skills)
 
     # Format 1: Antigravity SKILL.md (Google AGY Skill Specification)
     if format in ("antigravity_skill", "agy_skill", "skill_md"):
@@ -1168,28 +1616,46 @@ async def export_project_skills(
             f"# FlowDev-AI Defensive Coding Skill ({project_id})",
             "",
             f"This skill contains active quality guidelines, architectural constraints, and learned anti-patterns for `{project_id}`.",
+            "It empowers IDE AI assistants (such as Google Antigravity) to write robust, secure code adhering to repository quality gates.",
             "",
             "## 🛡️ Critical Quality Gate Requirements",
             "When generating or refactoring code in this repository, you MUST adhere to the following rules:",
             "",
         ])
-        if custom_rules:
+        if valid_custom_rules:
             lines.append("### Active Pre-Commit Gatekeeper Regex Checks")
-            for r in custom_rules:
-                lines.append(f"- **{r.get('title', 'Rule')}**: `{r.get('pattern', '')}` (Level: {r.get('level', 'critical')})")
+            for r in valid_custom_rules:
+                level = r.get("level", "warning")
+                lines.append(f"- **{r.get('title', 'Rule')}**: `{r.get('pattern', '')}` (Level: {level})")
                 if r.get("message"):
                     lines.append(f"  *Enforcement:* {r.get('message')}")
             lines.append("")
 
         if agent_skills:
-            lines.append("## 📚 Synthesized Engineering Best Practices")
-            for idx, skill in enumerate(agent_skills, 1):
-                lines.append(f"### Rule {idx}: {skill.get('title', 'Defensive Rule')}")
-                lines.append(f"**Principle:** {skill.get('summary', '')}")
-                lines.append("")
-                if skill.get("markdown"):
-                    lines.append(skill.get("markdown"))
+            lines.append("## 📚 Domain-Scoped Engineering Best Practices")
+            scope_labels = [
+                ("security", "### Security & Injection Prevention"),
+                ("frontend", "### Frontend / TypeScript / React Standards"),
+                ("backend", "### Backend / Python / Microservices Standards"),
+                ("general", "### General Engineering Standards"),
+            ]
+            for scope_key, label in scope_labels:
+                skills_in_scope = grouped_skills.get(scope_key, [])
+                if not skills_in_scope:
+                    continue
+                lines.append(label)
+                for s in skills_in_scope:
+                    lines.append(f"#### {s.get('title', 'Defensive Standard')}")
+                    if s.get("summary"):
+                        lines.append(f"**Principle:** {s.get('summary')}")
+                    globs = s.get("file_globs")
+                    if globs and isinstance(globs, list):
+                        lines.append(f"**Scope:** `{', '.join(globs)}`")
                     lines.append("")
+                    s_md = s.get("skill_markdown") or s.get("markdown") or ""
+                    if s_md:
+                        lines.append(s_md.strip())
+                        lines.append("")
         else:
             lines.append("## 📚 Standard Defensive Rules")
             lines.append("- Always perform defensive null checks (`?.`, `??`).")
@@ -1211,9 +1677,9 @@ async def export_project_skills(
             "## Code Quality Standards & Guidelines",
             "",
         ])
-        if custom_rules:
+        if valid_custom_rules:
             lines.append("### Pre-Commit Gatekeeper Constraints")
-            for r in custom_rules:
+            for r in valid_custom_rules:
                 lines.append(f"- **{r.get('title', 'Rule')}**: `{r.get('pattern', '')}`")
                 if r.get("message"):
                     lines.append(f"  *Action:* {r.get('message')}")
@@ -1221,13 +1687,32 @@ async def export_project_skills(
 
         if agent_skills:
             lines.append("### Project-Specific Agent Skills & Defensive Rules")
-            for idx, skill in enumerate(agent_skills, 1):
-                lines.append(f"#### {idx}. {skill.get('title', 'Defensive Standard')}")
-                lines.append(f"**Summary:** {skill.get('summary', '')}")
+            scope_labels = [
+                ("security", "#### 🛡️ 安全敏感接口与高危函数防护规范 (Security & RCE Defense)"),
+                ("frontend", "#### 🎨 前端与客户端空值安全防护规范 (Frontend / React / TypeScript)"),
+                ("backend", "#### ⚙️ 后端服务稳定性与接口规范 (Backend / Python / API)"),
+                ("general", "#### 📚 通用代码健壮性与边界防御规范 (General Engineering Principles)"),
+            ]
+            rule_counter = 1
+            for scope_key, label in scope_labels:
+                skills_in_scope = grouped_skills.get(scope_key, [])
+                if not skills_in_scope:
+                    continue
+                lines.append(label)
                 lines.append("")
-                if skill.get("markdown"):
-                    lines.append(skill.get("markdown"))
+                for s in skills_in_scope:
+                    lines.append(f"##### {rule_counter}. {s.get('title', 'Defensive Standard')}")
+                    if s.get("summary"):
+                        lines.append(f"**Summary:** {s.get('summary')}")
+                    globs = s.get("file_globs")
+                    if globs and isinstance(globs, list):
+                        lines.append(f"**Applies to:** `{', '.join(globs)}`")
                     lines.append("")
+                    s_md = s.get("skill_markdown") or s.get("markdown") or ""
+                    if s_md:
+                        lines.append(s_md.strip())
+                        lines.append("")
+                    rule_counter += 1
         else:
             lines.append("### General Rules")
             lines.append("- Guard against null/undefined property dereferences.")
@@ -1279,10 +1764,10 @@ async def export_project_skills(
                 "",
             ])
 
-    if custom_rules:
+    if valid_custom_rules:
         lines.append("### Pre-Commit Quality Gate Regex Constraints")
         lines.append("The repository gatekeeper actively blocks commits violating these regex patterns:")
-        for r in custom_rules:
+        for r in valid_custom_rules:
             lines.append(f"- **{r.get('title', 'Rule')}**: `{r.get('pattern', '')}`")
             if r.get("message"):
                 lines.append(f"  *Reason:* {r.get('message')}")
@@ -1292,10 +1777,15 @@ async def export_project_skills(
         lines.append("### Synthesized Agent Skills & Defensive Standards")
         for idx, skill in enumerate(agent_skills, 1):
             lines.append(f"#### Skill {idx}: {skill.get('title', 'Defensive Standard')}")
-            lines.append(f"**Summary:** {skill.get('summary', '')}")
+            if skill.get("summary"):
+                lines.append(f"**Summary:** {skill.get('summary')}")
+            globs = skill.get("file_globs")
+            if globs and isinstance(globs, list):
+                lines.append(f"**Applies to:** `{', '.join(globs)}`")
             lines.append("")
-            if skill.get("markdown"):
-                lines.append(skill.get("markdown"))
+            s_md = skill.get("skill_markdown") or skill.get("markdown") or ""
+            if s_md:
+                lines.append(s_md.strip())
                 lines.append("")
     else:
         lines.append("#### Default Stability Guard")

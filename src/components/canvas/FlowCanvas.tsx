@@ -393,7 +393,7 @@ function FlowCanvasInner({ showMiniMap = true }: { showMiniMap?: boolean }) {
           <FolderGit2 className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400 shrink-0" />
           <span className="text-slate-400 font-sans text-[11px]">编排目标:</span>
           <span className="font-semibold whitespace-nowrap">
-            {selectedProjectId === "all" ? (projects?.[0]?.id ?? "rxjs") : selectedProjectId}
+            {selectedProjectId === "all" ? (projects?.[0]?.id ?? "未选择") : selectedProjectId}
           </span>
         </div>
 
@@ -421,7 +421,8 @@ function FlowCanvasInner({ showMiniMap = true }: { showMiniMap?: boolean }) {
         {/* 1-Click Deploy Policy to Current Project */}
         <button
           onClick={async () => {
-            const target = selectedProjectId && selectedProjectId !== "all" ? selectedProjectId : (projects?.[0]?.id ?? "rxjs");
+            const target = selectedProjectId && selectedProjectId !== "all" ? selectedProjectId : (projects?.[0]?.id ?? "");
+            if (!target) return;
             setIsSavingPolicy(true);
             try {
               const ok = await saveCurrentPolicyToProject?.(target);

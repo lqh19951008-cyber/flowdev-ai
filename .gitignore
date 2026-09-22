@@ -110,3 +110,18 @@ Desktop.ini
 .gemini/antigravity/brain/
 .system_generated/
 
+# FlowDev-AI Auto-Generated IDE Agent Rule Files
+# These are written/merged by the pre-commit hook's push mode. They are
+# intentionally untracked here so a re-added project can never reintroduce
+# platform-generated guardrails into this repo's history.
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.cursorrules
+.windsurfrules
+.cursor/rules/flowdev-guards.mdc
+.github/copilot-instructions.md
+.agent/skills/flowdev-quality/
+.agents/skills/flowdev-quality/
+.agents/rules/flowdev-quality.md
+

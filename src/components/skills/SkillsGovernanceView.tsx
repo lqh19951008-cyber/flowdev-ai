@@ -29,6 +29,8 @@ import { AgentSkillItem, CustomGateRule } from "@/types/flow";
 import { cn } from "@/lib/utils";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { Checkbox } from "@heroui/react";
+import { BatchSkillDrawer } from "./BatchSkillDrawer";
 
 type IdeFormat = "antigravity_skill" | "gemini_md";
 
@@ -57,10 +59,14 @@ const IDE_TABS: IdeTabInfo[] = [
   },
 ];
 
+// In-Memory SWR Cache for project policy and IDE export previews
+const policyMemoryCache = new Map<string, { data: any; timestamp: number }>();
+const idePreviewMemoryCache = new Map<string, { text: string; timestamp: number }>();
+
 export function SkillsGovernanceView() {
   const router = useRouter();
   const projects = useFlowStore((s) => s?.projects ?? []);
-  const selectedProjectId = useFlowStore((s) => s?.selectedProjectId ?? "rxjs");
+  const selectedProjectId = useFlowStore((s) => s?.selectedProjectId ?? "all");
 
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
@@ -85,9 +91,15 @@ export function SkillsGovernanceView() {
   const [deleteConfirmTitle, setDeleteConfirmTitle] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Batch multi-select & merge drawer state
+  const [selectedSkillTitles, setSelectedSkillTitles] = useState<string[]>([]);
+  const [isBatchDrawerOpen, setIsBatchDrawerOpen] = useState(false);
+
   // New Skill form state
   const [newTitle, setNewTitle] = useState("");
   const [newCategory, setNewCategory] = useState("stability");
+  const [newScope, setNewScope] = useState("frontend");
+  const [newFileGlobs, setNewFileGlobs] = useState("");
   const [newSummary, setNewSummary] = useState("");
   const [newMarkdown, setNewMarkdown] = useState("");
   const [newRegexPattern, setNewRegexPattern] = useState("");
@@ -97,18 +109,30 @@ export function SkillsGovernanceView() {
   // Determine actual target project ID
   const targetProjectId = useMemo(() => {
     if (!selectedProjectId || selectedProjectId === "all") {
-      return projects?.[0]?.id ?? "rxjs";
+      // Never fabricate a project id; empty means "no repo registered yet".
+      return projects?.[0]?.id ?? "";
     }
     return selectedProjectId;
   }, [selectedProjectId, projects]);
 
-  // Fetch Policy & Skills
-  const fetchPolicy = async (projId: string) => {
-    setIsLoading(true);
+  // Fetch Policy & Skills with In-Memory Caching
+  const fetchPolicy = async (projId: string, force: boolean = false) => {
+    const cached = policyMemoryCache.get(projId);
+    const now = Date.now();
+    if (!force && cached && now - cached.timestamp < 30000) {
+      setAgentSkills(cached.data?.agent_skills ?? []);
+      setCustomRules(cached.data?.custom_rules ?? []);
+      setGateEnabled(cached.data?.gate_enabled ?? true);
+      setFailureAction(cached.data?.failure_action ?? "block_commit");
+      return;
+    }
+
+    setIsLoading(!cached);
     try {
       const res = await fetch(`http://127.0.0.1:8000/api/projects/${encodeURIComponent(projId)}/policy`);
       if (res?.ok) {
         const data = await res.json();
+        policyMemoryCache.set(projId, { data, timestamp: Date.now() });
         setAgentSkills(data?.agent_skills ?? []);
         setCustomRules(data?.custom_rules ?? []);
         setGateEnabled(data?.gate_enabled ?? true);
@@ -121,15 +145,24 @@ export function SkillsGovernanceView() {
     }
   };
 
-  // Fetch IDE Preview Text
-  const fetchIdePreview = async (projId: string, format: IdeFormat) => {
-    setIsIdePreviewLoading(true);
+  // Fetch IDE Preview Text with In-Memory Caching
+  const fetchIdePreview = async (projId: string, format: IdeFormat, force: boolean = false) => {
+    const cacheKey = `${projId}_${format}`;
+    const cached = idePreviewMemoryCache.get(cacheKey);
+    const now = Date.now();
+    if (!force && cached && now - cached.timestamp < 30000) {
+      setIdePreviewContent(cached.text ?? "");
+      return;
+    }
+
+    setIsIdePreviewLoading(!cached);
     try {
       const res = await fetch(
         `http://127.0.0.1:8000/api/projects/${encodeURIComponent(projId)}/skills/export?format=${format}`
       );
       if (res?.ok) {
         const text = await res.text();
+        idePreviewMemoryCache.set(cacheKey, { text: text ?? "", timestamp: Date.now() });
         setIdePreviewContent(text ?? "");
       }
     } catch (e) {
@@ -182,10 +215,12 @@ export function SkillsGovernanceView() {
       });
       if (res?.ok) {
         const data = await res.json();
+        policyMemoryCache.delete(targetProjectId);
+        idePreviewMemoryCache.clear();
         setCustomRules(data?.custom_rules ?? []);
         setAgentSkills(data?.agent_skills ?? []);
         setDeleteConfirmTitle(null);
-        fetchIdePreview(targetProjectId, activeIdeTab);
+        fetchIdePreview(targetProjectId, activeIdeTab, true);
       }
     } catch (err) {
       console.error("Failed to delete skill:", err);
@@ -204,6 +239,14 @@ export function SkillsGovernanceView() {
         agent_skill: {
           title: newTitle.trim(),
           category: newCategory,
+          scope: newScope,
+          file_globs: newFileGlobs
+            ? newFileGlobs
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean)
+            : undefined,
+          check_type: newRegexPattern.trim() ? "static_regex" : "ai_guideline",
           summary: newSummary.trim() || newTitle.trim(),
           markdown: newMarkdown.trim() || `# Skill: ${newTitle}\n\n${newSummary}`,
         },
@@ -225,19 +268,47 @@ export function SkillsGovernanceView() {
       });
 
       if (res?.ok) {
+        policyMemoryCache.delete(targetProjectId);
+        idePreviewMemoryCache.clear();
         setIsCreateModalOpen(false);
         setNewTitle("");
+        setNewCategory("stability");
+        setNewScope("frontend");
+        setNewFileGlobs("");
         setNewSummary("");
         setNewMarkdown("");
         setNewRegexPattern("");
-        await fetchPolicy(targetProjectId);
-        await fetchIdePreview(targetProjectId, activeIdeTab);
+        await fetchPolicy(targetProjectId, true);
+        await fetchIdePreview(targetProjectId, activeIdeTab, true);
       }
     } catch (err) {
       console.error("Failed to apply new skill:", err);
     } finally {
       setIsSavingNewSkill(false);
     }
+  };
+
+  const SCOPE_META: Record<string, { label: string; icon: string; color: string }> = {
+    security: {
+      label: "高危安全防线",
+      icon: "🛡️",
+      color: "bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800",
+    },
+    frontend: {
+      label: "前端 TS/React",
+      icon: "🎨",
+      color: "bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800",
+    },
+    backend: {
+      label: "后端 Python/API",
+      icon: "⚙️",
+      color: "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800",
+    },
+    general: {
+      label: "通用工程准则",
+      icon: "📚",
+      color: "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700",
+    },
   };
 
   const categories = useMemo(() => {
@@ -278,6 +349,37 @@ export function SkillsGovernanceView() {
     general: { label: "通用工程准则", color: "bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300" },
   };
 
+  // Batch selection derived state
+  const selectedSkills = useMemo(() => {
+    const set = new Set(selectedSkillTitles ?? []);
+    return (agentSkills ?? []).filter((s) => s && set.has(s?.title ?? ""));
+  }, [agentSkills, selectedSkillTitles]);
+
+  const allFilteredSelected = useMemo(
+    () => filteredSkills.length > 0 && filteredSkills.every((s) => selectedSkillTitles.includes(s?.title ?? "")),
+    [filteredSkills, selectedSkillTitles]
+  );
+
+  const toggleSkillSelect = (title: string) => {
+    setSelectedSkillTitles((prev) =>
+      (prev ?? []).includes(title) ? (prev ?? []).filter((t) => t !== title) : [...(prev ?? []), title]
+    );
+  };
+
+  const handleSelectAllFiltered = () => {
+    setSelectedSkillTitles((prev) =>
+      Array.from(new Set([...(prev ?? []), ...filteredSkills.map((s) => s?.title ?? "").filter(Boolean)]))
+    );
+  };
+
+  const handleClearSelection = () => setSelectedSkillTitles([]);
+
+  const handleBatchApplied = () => {
+    if (!targetProjectId) return;
+    fetchPolicy(targetProjectId);
+    fetchIdePreview(targetProjectId, activeIdeTab);
+  };
+
   return (
     <div className="flex-1 w-full h-full overflow-y-auto bg-slate-50 dark:bg-[#0b0f19] p-4 md:p-6 space-y-6 transition-colors duration-200">
       {/* 1. Header Banner & Actions */}
@@ -298,7 +400,7 @@ export function SkillsGovernanceView() {
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex items-center gap-1.5 flex-wrap">
               <span>当前治理目标：</span>
               <span className="font-mono font-semibold text-blue-600 dark:text-cyan-400 bg-blue-50 dark:bg-blue-950/50 px-1.5 py-0.5 rounded border border-blue-200 dark:border-blue-800">
-                {targetProjectId}
+                {targetProjectId || "未选择项目"}
               </span>
               <span>· 沉淀团队最佳实践，原生适配 Google Antigravity & Gemini 智能体规范与 Git 门禁</span>
             </p>
@@ -322,6 +424,30 @@ export function SkillsGovernanceView() {
           >
             <Plus className="h-3.5 w-3.5" />
             <span>新建 Skill 资产</span>
+          </button>
+
+          <button
+            onClick={() => setIsBatchDrawerOpen(true)}
+            disabled={(selectedSkillTitles ?? []).length === 0}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all",
+              (selectedSkillTitles ?? []).length > 0
+                ? "bg-gradient-to-r from-indigo-500 via-purple-600 to-fuchsia-600 hover:from-indigo-600 hover:to-fuchsia-700 text-white shadow-sm hover:shadow cursor-pointer"
+                : "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-600 cursor-not-allowed"
+            )}
+            title={
+              (selectedSkillTitles ?? []).length > 0
+                ? `将已勾选的 ${(selectedSkillTitles ?? []).length} 条资产合并生成一个 Skill`
+                : "请先在下方卡片勾选需要合并的 Skill 资产"
+            }
+          >
+            <Layers className="h-3.5 w-3.5" />
+            <span>批量生成 Skill</span>
+            {(selectedSkillTitles ?? []).length > 0 && (
+              <span className="px-1.5 py-0.5 rounded-full bg-white/20 text-[10px] font-mono">
+                {(selectedSkillTitles ?? []).length}
+              </span>
+            )}
           </button>
         </div>
       </div>
@@ -399,7 +525,7 @@ export function SkillsGovernanceView() {
           <div className="text-[11px] text-slate-500 mt-1 flex items-center justify-between">
             <span>可在质量大盘一键切换</span>
             <Link
-              href={`/dashboard?project=${encodeURIComponent(targetProjectId)}`}
+              href={targetProjectId ? `/dashboard?project=${encodeURIComponent(targetProjectId)}` : "/dashboard"}
               className="text-blue-500 hover:underline inline-flex items-center gap-0.5"
             >
               <span>查看详情</span>
@@ -460,6 +586,45 @@ export function SkillsGovernanceView() {
           </div>
         </div>
 
+        {/* Batch Selection Toolbar */}
+        <div className="px-4 py-2.5 border-b border-slate-200/80 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 bg-indigo-50/30 dark:bg-indigo-950/20">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Checkbox
+              size="sm"
+              isSelected={allFilteredSelected}
+              onValueChange={(checked) => (checked ? handleSelectAllFiltered() : handleClearSelection())}
+              isDisabled={filteredSkills.length === 0}
+              classNames={{ label: "text-[11px] text-slate-700 dark:text-slate-300" }}
+            >
+              全选当前 {filteredSkills.length} 项
+            </Checkbox>
+            {(selectedSkillTitles ?? []).length > 0 && (
+              <span className="text-[11px] font-medium text-indigo-600 dark:text-indigo-400">
+                已选 {(selectedSkillTitles ?? []).length} 项
+              </span>
+            )}
+          </div>
+
+          {(selectedSkillTitles ?? []).length > 0 && (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setIsBatchDrawerOpen(true)}
+                className="flex items-center gap-1 px-3 py-1 rounded-lg bg-gradient-to-r from-indigo-500 via-purple-600 to-fuchsia-600 text-white text-[11px] font-semibold shadow-xs hover:shadow transition-all cursor-pointer"
+              >
+                <Layers className="h-3 w-3" />
+                <span>批量生成 Skill</span>
+              </button>
+              <button
+                onClick={handleClearSelection}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-700 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <X className="h-3 w-3" />
+                <span>清空</span>
+              </button>
+            </div>
+          )}
+        </div>
+
         {/* Skill Cards Grid */}
         <div className="p-4">
           {isLoading ? (
@@ -480,6 +645,7 @@ export function SkillsGovernanceView() {
               {filteredSkills.map((skill, index) => {
                 if (!skill) return null;
                 const catMeta = categoryLabels?.[skill?.category ?? "general"] ?? categoryLabels.general;
+                const scopeMeta = SCOPE_META[skill?.scope ?? "general"] ?? SCOPE_META.general;
                 const matchedRule = (customRules ?? []).find(
                   (r) => r?.title?.toLowerCase() === skill?.title?.toLowerCase()
                 );
@@ -492,19 +658,35 @@ export function SkillsGovernanceView() {
                     <div>
                       {/* Top Badges */}
                       <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
-                        <span className={cn("px-2 py-0.5 rounded text-[10px] font-medium", catMeta.color)}>
-                          {catMeta.label}
-                        </span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <Checkbox
+                            size="sm"
+                            isSelected={(selectedSkillTitles ?? []).includes(skill?.title ?? "")}
+                            onValueChange={() => toggleSkillSelect(skill?.title ?? "")}
+                            aria-label={`勾选 ${skill?.title ?? ""} 用于批量生成`}
+                          />
+                          <span className={cn("px-2 py-0.5 rounded text-[10px] font-medium flex items-center gap-1", scopeMeta.color)}>
+                            <span>{scopeMeta.icon}</span>
+                            <span>{scopeMeta.label}</span>
+                          </span>
+                          <span className={cn("px-1.5 py-0.5 rounded text-[10px] font-medium", catMeta.color)}>
+                            {catMeta.label}
+                          </span>
+                        </div>
 
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
                           {matchedRule ? (
                             <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20 font-semibold flex items-center gap-1">
                               <ShieldAlert className="h-3 w-3" />
-                              <span>Pre-Commit 卡点已绑定</span>
+                              <span>Pre-Commit 卡点 ({matchedRule.level === "critical" ? "阻断" : "警告"})</span>
+                            </span>
+                          ) : skill?.check_type === "static_regex" ? (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20 font-medium">
+                              🔬 静态正则探针
                             </span>
                           ) : (
-                            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
-                              IDE AI 提示约束
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-indigo-500/10 text-indigo-700 dark:text-indigo-400 border border-indigo-500/20 font-medium">
+                              🧠 AI 规范指导
                             </span>
                           )}
                         </div>
@@ -517,6 +699,21 @@ export function SkillsGovernanceView() {
                       <p className="text-xs text-slate-600 dark:text-slate-400 mt-1.5 leading-relaxed line-clamp-2">
                         {skill.summary || "暂无描述"}
                       </p>
+
+                      {/* Applied file globs */}
+                      {skill?.file_globs && skill.file_globs.length > 0 && (
+                        <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[10px] text-slate-400">文件范围:</span>
+                          {skill.file_globs.map((g) => (
+                            <span
+                              key={g}
+                              className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-[10px] font-mono border border-slate-200 dark:border-slate-700"
+                            >
+                              {g}
+                            </span>
+                          ))}
+                        </div>
+                      )}
 
                       {/* Associated Regex Pattern snippet */}
                       {matchedRule?.pattern && (
@@ -598,99 +795,6 @@ export function SkillsGovernanceView() {
         </div>
       </div>
 
-      {/* 4. Multi-IDE Distribution Hub (分发预览区) */}
-      <div className="bg-white dark:bg-slate-900/70 border border-slate-200/80 dark:border-slate-800 rounded-2xl shadow-sm overflow-hidden">
-        {/* Hub Header */}
-        <div className="p-4 border-b border-slate-200/80 dark:border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-3 bg-gradient-to-r from-slate-50 via-indigo-50/20 to-white dark:from-slate-900/60 dark:to-slate-950">
-          <div>
-            <div className="flex items-center gap-2">
-              <Layers className="h-4 w-4 text-indigo-500" />
-              <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                Google 智能体规范实时生成与分发预览
-              </h2>
-            </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              FlowDev 引擎将所有 Skill 资产与 Pre-Commit 门禁卡点编译为 Google DeepMind Antigravity 与 Gemini 原生规范配置
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => handleCopy(idePreviewContent, "full_preview")}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 transition-colors shadow-xs cursor-pointer"
-            >
-              {copiedKey === "full_preview" ? (
-                <>
-                  <Check className="h-3.5 w-3.5 text-emerald-500" />
-                  <span className="text-emerald-600 dark:text-emerald-400">已复制到剪贴板</span>
-                </>
-              ) : (
-                <>
-                  <Copy className="h-3.5 w-3.5" />
-                  <span>复制全量配置</span>
-                </>
-              )}
-            </button>
-
-            <button
-              onClick={() => {
-                const currentTab = IDE_TABS.find((t) => t.id === activeIdeTab);
-                const filename = currentTab?.filename?.split("/").pop() ?? "SKILL.md";
-                handleDownloadFile(idePreviewContent, filename);
-              }}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
-            >
-              <Download className="h-3.5 w-3.5" />
-              <span>下载配置文件</span>
-            </button>
-          </div>
-        </div>
-
-        {/* IDE Selector Tabs */}
-        <div className="px-4 pt-3 border-b border-slate-200 dark:border-slate-800 flex items-center gap-2 overflow-x-auto bg-slate-50/40 dark:bg-slate-900/30">
-          {IDE_TABS.map((tab) => {
-            const isActive = activeIdeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => handleSwitchIdeTab(tab.id)}
-                className={cn(
-                  "flex items-center gap-2 px-3.5 py-2 rounded-t-xl text-xs font-medium border-t border-x transition-all cursor-pointer whitespace-nowrap",
-                  isActive
-                    ? "bg-white dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-blue-600 dark:text-cyan-400 font-bold -mb-px shadow-xs"
-                    : "border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300"
-                )}
-              >
-                <span>{tab.iconText}</span>
-                <span>{tab.label}</span>
-                <span className="text-[10px] font-mono text-slate-400">({tab.filename})</span>
-              </button>
-            );
-          })}
-        </div>
-
-        {/* IDE Preview Code Block */}
-        <div className="p-4 bg-slate-950 relative">
-          <div className="flex items-center justify-between text-[11px] font-mono text-slate-400 pb-2 border-b border-slate-800 mb-2">
-            <span>
-              📄 目标路径: {IDE_TABS.find((t) => t.id === activeIdeTab)?.filename}
-            </span>
-            <span>{idePreviewContent ? idePreviewContent.split("\n").length : 0} 行</span>
-          </div>
-
-          {isIdePreviewLoading ? (
-            <div className="py-12 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
-              <RefreshCw className="h-4 w-4 animate-spin text-cyan-400" />
-              <span>正在实时编译生成配置...</span>
-            </div>
-          ) : (
-            <pre className="text-xs font-mono text-slate-300 overflow-x-auto max-h-72 p-2 leading-relaxed select-text scrollbar-thin">
-              {idePreviewContent || "# 暂无内容"}
-            </pre>
-          )}
-        </div>
-      </div>
-
       {/* 5. Modal: Markdown Detail Preview */}
       {previewSkill && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-in fade-in duration-150">
@@ -711,6 +815,38 @@ export function SkillsGovernanceView() {
             </div>
 
             <div className="p-5 overflow-y-auto flex-1 space-y-4">
+              {/* Badges: Scope, Check Type, File Globs */}
+              <div className="flex items-center gap-2 flex-wrap">
+                {(() => {
+                  const sMeta = SCOPE_META[previewSkill?.scope ?? "general"] ?? SCOPE_META.general;
+                  return (
+                    <span className={cn("px-2 py-0.5 rounded text-[10px] font-medium flex items-center gap-1", sMeta.color)}>
+                      <span>{sMeta.icon}</span>
+                      <span>{sMeta.label}</span>
+                    </span>
+                  );
+                })()}
+                {previewSkill?.check_type === "static_regex" ? (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20 font-medium">
+                    🔬 静态正则卡点
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-indigo-500/10 text-indigo-700 dark:text-indigo-400 border border-indigo-500/20 font-medium">
+                    🧠 AI 规范指导 (无物理阻断)
+                  </span>
+                )}
+                {previewSkill?.file_globs && previewSkill.file_globs.length > 0 && (
+                  <div className="flex items-center gap-1">
+                    <span className="text-[10px] text-slate-400">文件范围:</span>
+                    {previewSkill.file_globs.map((g) => (
+                      <span key={g} className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[10px] font-mono">
+                        {g}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-800 dark:text-amber-300">
                 <div className="font-semibold mb-0.5">规范摘要 (Summary)</div>
                 <div>{previewSkill.summary}</div>
@@ -787,6 +923,22 @@ export function SkillsGovernanceView() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    技术作用域 (Scope)
+                  </label>
+                  <select
+                    value={newScope}
+                    onChange={(e) => setNewScope(e.target.value as any)}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+                  >
+                    <option value="frontend">🎨 前端 TS/React (frontend)</option>
+                    <option value="backend">⚙️ 后端 Python/API (backend)</option>
+                    <option value="security">🛡️ 高危安全防线 (security)</option>
+                    <option value="general">📚 通用工程准则 (general)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-medium text-slate-700 dark:text-slate-300 mb-1">
                     规范分类 (Category)
                   </label>
                   <select
@@ -801,6 +953,21 @@ export function SkillsGovernanceView() {
                     <option value="general">通用工程准则 (general)</option>
                   </select>
                 </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    作用文件匹配 (File Globs，逗号分隔)
+                  </label>
+                  <input
+                    type="text"
+                    value={newFileGlobs}
+                    onChange={(e) => setNewFileGlobs(e.target.value)}
+                    placeholder="例：*.tsx, *.ts, src/**"
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+                  />
+                </div>
 
                 <div>
                   <label className="block font-medium text-slate-700 dark:text-slate-300 mb-1">
@@ -811,8 +978,8 @@ export function SkillsGovernanceView() {
                     onChange={(e) => setNewGateLevel(e.target.value as any)}
                     className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
                   >
+                    <option value="warning">⚠️ 仅提示警告 (放行提交 - 推荐)</option>
                     <option value="critical">🛑 严格卡点 (阻断提交)</option>
-                    <option value="warning">⚠️ 仅提示警告 (放行提交)</option>
                   </select>
                 </div>
               </div>
@@ -985,6 +1152,16 @@ export function SkillsGovernanceView() {
           </div>
         </div>
       )}
+
+      {/* 9. HeroUI Drawer: Batch Multi-Select → Merge Skill Generation */}
+      <BatchSkillDrawer
+        isOpen={isBatchDrawerOpen}
+        onOpenChange={setIsBatchDrawerOpen}
+        selectedSkills={selectedSkills}
+        customRules={customRules}
+        targetProjectId={targetProjectId}
+        onApplied={handleBatchApplied}
+      />
     </div>
   );
 }

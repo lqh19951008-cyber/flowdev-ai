@@ -26,9 +26,9 @@ export function StatusBar({ showMiniMap = true, onToggleMiniMap }: StatusBarProp
     isExecuting,
     projects,
     activeViewMode,
-  } = useFlowStore();
+  } = useFlowStore() ?? {};
 
-  const currentProject = projects.find((p) => p.id === selectedProjectId);
+  const currentProject = projects?.find((p) => p?.id === selectedProjectId);
 
   return (
     <footer className="h-7 w-full border-t border-slate-200/80 dark:border-slate-800/80 bg-white/95 dark:bg-slate-950/95 px-3 flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400 z-20 select-none shrink-0 backdrop-blur transition-colors duration-200">
@@ -60,7 +60,7 @@ export function StatusBar({ showMiniMap = true, onToggleMiniMap }: StatusBarProp
           </span>
           {currentProject && (
             <span className="text-[10px] text-slate-400 dark:text-slate-500">
-              ({currentProject.pass_rate}% 通过率)
+              ({currentProject?.pass_rate}% 通过率)
             </span>
           )}
         </div>
@@ -72,6 +72,11 @@ export function StatusBar({ showMiniMap = true, onToggleMiniMap }: StatusBarProp
           <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
             <span className="h-1.5 w-1.5 rounded-full bg-blue-500 dark:bg-cyan-400" />
             <span>研发效能控制台 · 企业质量门禁与全员提交审计中台</span>
+          </div>
+        ) : activeViewMode === "skills" ? (
+          <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
+            <Sparkles className="h-3 w-3 text-amber-500 dark:text-amber-400" />
+            <span>AI 规范中枢 · IDE 提示词注入与预检规则同步中</span>
           </div>
         ) : isExecuting ? (
           <div className="flex items-center gap-1 text-blue-600 dark:text-blue-400 animate-pulse font-medium">
@@ -94,7 +99,7 @@ export function StatusBar({ showMiniMap = true, onToggleMiniMap }: StatusBarProp
             <div className="flex items-center gap-1 text-slate-500 dark:text-slate-400 font-mono">
               <Layers className="h-3 w-3 text-slate-400 dark:text-slate-500" />
               <span>
-                {nodes.length} 节点 · {edges.length} 连线
+                {nodes?.length ?? 0} 节点 · {edges?.length ?? 0} 连线
               </span>
             </div>
 
@@ -134,9 +139,15 @@ export function StatusBar({ showMiniMap = true, onToggleMiniMap }: StatusBarProp
               </>
             )}
           </>
+        ) : activeViewMode === "skills" ? (
+          <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400 font-mono text-[10px]">
+            <span className="text-amber-600 dark:text-amber-400 font-semibold">Skill 智能体知识库</span>
+            <span className="text-slate-300 dark:text-slate-700">|</span>
+            <span className="text-emerald-600 dark:text-emerald-400 font-medium">双向门禁同步生效</span>
+          </div>
         ) : (
           <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400 font-mono text-[10px]">
-            <span className="text-slate-800 dark:text-slate-300 font-semibold">{projects.length}</span>
+            <span className="text-slate-800 dark:text-slate-300 font-semibold">{projects?.length ?? 0}</span>
             <span>个活跃项目仓库</span>
             <span className="text-slate-300 dark:text-slate-700">|</span>
             <span className="text-emerald-600 dark:text-emerald-400 font-medium">探针守护中</span>

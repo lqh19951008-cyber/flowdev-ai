@@ -64,7 +64,7 @@ const API_PATH = "/api/cli/scan";
 // version is newer, it transparently downloads the new script, backs up
 // the current one to .git/flowdev/.hook-version.bak, and re-execs itself.
 // This is how we ship upgrades without admins running `cp` everywhere.
-const HOOK_VERSION = "2.0.4";
+const HOOK_VERSION = "2.0.7";
 // == HANDBOOK: push-mode ==
 //
 // 服务端升级规则后, **主动下发**到所有本地仓库, 开发者下次 commit 自动同步。
@@ -125,6 +125,69 @@ function logBypassAudit(reason, user = "developer") {
     const logLine = `[${timestamp}] User="${user}" Reason="${reason}" Commit="${commitHash}"\n`;
     fs.appendFileSync(logPath, logLine, "utf8");
   } catch (e) {}
+}
+
+function selfDetachHook(reason, user = "developer") {
+  /**
+   * Hands-off self-uninstall. When the server reports that the project this
+   * repo is bound to has been removed, the still-installed local hook removes
+   * itself so the developer never has to run anything manually.
+   *
+   * Safety rules:
+   *   - only ever touches <gitRoot>/.git/hooks/pre-commit (never the shared
+   *     flowdev-hook.js source under scripts/);
+   *   - only removes it when the file is recognisably a FlowDev hook;
+   *   - restores the original pre-commit backup if one exists;
+   *   - additionally flips the repo-level kill switch as a belt-and-braces,
+   *     so even a locked/undeletable file cannot keep gating.
+   */
+  const result = { detached: false, restored: false, reason, error: "" };
+  try {
+    const gitRoot = getGitRoot();
+    const hookPath = path.join(gitRoot, ".git", "hooks", "pre-commit");
+    const backupPath = hookPath + ".flowdev-orig";
+
+    const looksLikeFlowDev = (p) => {
+      try {
+        if (!fs.existsSync(p)) return false;
+        const content = fs.readFileSync(p, "utf-8");
+        return /flowdev/i.test(content)
+          && /(flowdev-hook\.js|FlowDev-AI Pre-Commit|FLOWDEV)/i.test(content);
+      } catch (e) {
+        return false;
+      }
+    };
+
+    if (looksLikeFlowDev(hookPath)) {
+      if (fs.existsSync(backupPath) && !looksLikeFlowDev(backupPath)) {
+        fs.copyFileSync(backupPath, hookPath);
+        fs.unlinkSync(backupPath);
+        result.restored = true;
+        result.detached = true;
+      } else {
+        fs.unlinkSync(hookPath);
+        result.detached = true;
+      }
+    }
+
+    // Belt-and-braces kill switch: guarantees no further gating even when the
+    // hook file itself could not be removed (e.g. locked on Windows).
+    try {
+      execFileSync("git", ["config", "flowdev.enabled", "false"], {
+        cwd: gitRoot,
+        stdio: ["pipe", "pipe", "ignore"],
+      });
+    } catch (e) {}
+  } catch (e) {
+    result.error = e?.message ?? String(e);
+  }
+
+  // Audit trail is mandatory for every bypass / auto-detach.
+  logBypassAudit(
+    `${reason} - hook self-detach ${result.detached ? "done" : "attempted"}`,
+    user
+  );
+  return result;
 }
 
 function printBanner() {
@@ -897,6 +960,10 @@ async function checkAndPromptPush(targetProject, gitRoot, options = {}) {
   if (process?.env?.FLOWDEV_PUSH_DEBUG === "1") {
     console.warn(`${c.dim}[FlowDev-Push] DEBUG pending=${status?.pending} pending_version=${status?.pending_push_version} local=${localVersion}${c.reset}`);
   }
+  // Project removed / unknown: nothing to push (and never recreate it).
+  if (status?.deleted) {
+    return [];
+  }
   if (!status || !status.pending || !status.pending_push_version) {
     return [];
   }
@@ -1445,6 +1512,55 @@ async function main() {
   console.log(
     "\n----------------------------------------------------------------"
   );
+
+  // === Removed / unknown project: self-detach instead of blocking ===
+  // The server no longer auto-creates projects that were deleted, so a
+  // still-installed hook must not keep gating a repo the gatekeeper has
+  // already removed. Log the bypass (audit requirement) and allow the commit.
+  if (scanResult?.project_missing) {
+    const removed = Boolean(scanResult?.project_deleted);
+
+    if (removed) {
+      // Project was deliberately deleted on the server -> zero-touch cleanup:
+      // uninstall this repo's hook, restore the original pre-commit if backed
+      // up, and flip the kill switch. The developer touches nothing.
+      const detach = selfDetachHook(
+        `PROJECT_REMOVED - project '${projectId}' tombstoned`,
+        committer
+      );
+      console.log("");
+      console.log(`${c.yellow}${c.bold}================================================================${c.reset}`);
+      console.log(`${c.yellow}${c.bold} [FlowDev] 项目已被移除，已自动放行并自卸载${c.reset}`);
+      console.log(`${c.yellow}${c.bold}================================================================${c.reset}`);
+      console.log(`  项目标识: ${c.cyan}${projectId}${c.reset}`);
+      console.log(`  ${c.dim}原因:${c.reset} 该项目已在服务端被移除（软删除），FlowDev 不会自动重建并套用严格策略。`);
+      if (detach.detached) {
+        console.log(`  ✅ 已自动卸载本地门禁钩子${detach.restored ? "（并恢复仓库原有 pre-commit）" : ""}，后续提交不再触发 FlowDev。`);
+      } else {
+        console.log(`  ⚠️ 钩子文件未能删除${detach.error ? `（${detach.error}）` : ""}，但已写入仓库级开关 flowdev.enabled=false，后续提交同样不会再被拦截。`);
+      }
+      console.log(`  ${c.dim}如需恢复门禁: 在 Web 控制台重新添加项目 '${projectId}'，并重新安装钩子即可。${c.reset}`);
+      console.log(`${c.yellow}${c.bold}================================================================${c.reset}\n`);
+      process.exit(0);
+    }
+
+    // Never registered (e.g. a brand-new repo, or the platform's own repo).
+    // Pass this commit but KEEP the hook, so gating automatically resumes the
+    // moment an admin registers the project. No self-detach here.
+    logBypassAudit(
+      `PROJECT_UNKNOWN - gate bypassed (project '${projectId}' not registered)`,
+      committer
+    );
+    console.log("");
+    console.log(`${c.yellow}${c.bold}================================================================${c.reset}`);
+    console.log(`${c.yellow}${c.bold} [FlowDev] 项目尚未接入，本次提交自动放行${c.reset}`);
+    console.log(`${c.yellow}${c.bold}================================================================${c.reset}`);
+    console.log(`  项目标识: ${c.cyan}${projectId}${c.reset}`);
+    console.log(`  ${c.dim}说明:${c.reset} 该项目未在服务端注册，FlowDev 不会自动创建并套用严格策略（钩子保留）。`);
+    console.log(`  ${c.dim}如需启用门禁:${c.reset} 在 Web 控制台添加项目 '${projectId}' 即可自动恢复审查。`);
+    console.log(`${c.yellow}${c.bold}================================================================${c.reset}\n`);
+    process.exit(0);
+  }
 
   if (scanResult?.passed) {
     // Passed successfully! Make it loud so the developer actually notices

@@ -9,6 +9,7 @@ import { DiffModal } from "@/components/modal/DiffModal";
 import { SystemSettingsModal } from "@/components/modal/FeishuConfigModal";
 import { ProjectStatsModal } from "@/components/dashboard/ProjectStatsModal";
 import { AddProjectModal } from "@/components/modal/AddProjectModal";
+import { WorkspaceContainer } from "@/components/layout/WorkspaceContainer";
 import { useFlowStore } from "@/stores/useFlowStore";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -24,9 +25,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {/* 顶部统一导航栏 */}
       <Header />
 
-      {/* 页面主体内容区 */}
+      {/* 页面主体内容区：多 Tab 视图常驻与轻量化 Keep-Alive */}
       <div className="flex-1 w-full min-h-0 overflow-hidden relative">
-        {children}
+        <WorkspaceContainer showMiniMap={showMiniMap} />
+        <div className="hidden" aria-hidden="true">
+          {children}
+        </div>
       </div>
 
       {/* 底部系统状态栏 */}

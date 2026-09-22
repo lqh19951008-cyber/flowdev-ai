@@ -195,7 +195,7 @@ export function RuleEvolutionModal({
     }
   }, [isOpen, scanEvent, projectId]);
 
-  const targetProjectId = scanEvent?.project_id || (projectId === "all" ? "rxjs" : projectId) || "rxjs";
+  const targetProjectId = scanEvent?.project_id || (projectId === "all" ? "" : projectId) || "";
 
   const synthesizeRuleFromEvent = async (event: ScanEventItem) => {
     setLoading(true);

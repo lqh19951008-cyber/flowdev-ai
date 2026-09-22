@@ -110,6 +110,12 @@ const debouncedPersist = (
   }, 500);
 };
 
+// SWR Request Deduplication & In-Memory TTL Cache
+let fetchProjectsPromise: Promise<void> | null = null;
+let lastProjectsFetchTime = 0;
+const fetchEventsPromiseMap = new Map<string, Promise<void>>();
+const lastEventsFetchTimeMap = new Map<string, number>();
+
 interface FlowState {
   // Main Navigation View: "dashboard" (质量大盘) vs "pipeline" (策略编排)
   activeViewMode: ActiveViewMode;
@@ -170,12 +176,12 @@ interface FlowState {
   // Multi-Tenant Actions
   setSelectedProjectId: (id: string) => void;
   setProjects: (projects: ProjectItem[]) => void;
-  fetchProjects: () => Promise<void>;
+  fetchProjects: (force?: boolean) => Promise<void>;
   createProject: (payload: { id: string; name?: string; description?: string; failure_action?: "block_commit" | "warn_only" | "disabled"; presetId?: PresetId }) => Promise<boolean>;
   deleteProject: (projectId: string) => Promise<boolean>;
   reorderProjects: (newProjects: ProjectItem[]) => void;
   updateProjectGateMode: (projectId: string, mode: "block_commit" | "warn_only" | "disabled") => Promise<void>;
-  fetchRecentEvents: (projectId?: string) => Promise<void>;
+  fetchRecentEvents: (projectId?: string, force?: boolean) => Promise<void>;
   addLiveEvent: (event: ScanEventItem) => void;
   markEventAsRead: (id: string) => void;
   markAllEventsAsRead: () => void;
@@ -410,19 +416,23 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   isDiffModalOpen: false,
   activePresetId: "full_review_heal",
 
-  // Main Navigation View: "dashboard" vs "pipeline"
-  activeViewMode: "pipeline",
+  // Main Navigation View: "dashboard" vs "pipeline" vs "skills"
+  activeViewMode: "dashboard",
   setActiveViewMode: (mode: ActiveViewMode) => {
     set({ activeViewMode: mode });
     if (mode === "pipeline" && get().selectedProjectId === "all") {
-      const firstProj = get().projects[0]?.id || "rxjs";
-      get().setSelectedProjectId(firstProj);
+      // Pipeline needs a concrete repo; pick the first real one. If none is
+      // registered yet, keep "all" instead of inventing a phantom `rxjs`.
+      const firstProj = get().projects?.[0]?.id;
+      if (firstProj) get().setSelectedProjectId?.(firstProj);
     }
   },
 
   // Multi-Tenant & Live Guard State
   projects: [],
-  selectedProjectId: "rxjs",
+  // Default to the aggregated "all projects" view. A concrete project id is
+  // only selected when the user picks one (or when the URL carries ?project=).
+  selectedProjectId: "all",
   recentEvents: [],
   readEventIds: [],
   unreadEventsCount: 0,
@@ -717,17 +727,46 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     set({ projects: ordered });
   },
 
-  fetchProjects: async () => {
-    try {
-      const res = await fetch("http://127.0.0.1:8000/api/projects");
-      if (res.ok) {
-        const data = await res.json();
-        const ordered = applyProjectOrdering(data);
-        set({ projects: ordered });
-      }
-    } catch (e) {
-      console.warn("Failed to fetch projects", e);
+  fetchProjects: async (force: boolean = false) => {
+    const now = Date.now();
+    // 8s TTL 缓存防御，避免组件挂载风暴
+    if (!force && (get().projects?.length ?? 0) > 0 && now - lastProjectsFetchTime < 8000) {
+      return;
     }
+    if (fetchProjectsPromise) {
+      return fetchProjectsPromise;
+    }
+    fetchProjectsPromise = (async () => {
+      try {
+        const res = await fetch("http://127.0.0.1:8000/api/projects");
+        if (res?.ok) {
+          const data = await res.json();
+          const ordered = applyProjectOrdering(Array.isArray(data) ? data : []);
+          // Reconcile: drop any in-memory audit events whose project no longer
+          // exists (e.g. deleted elsewhere or a stale SSE push).
+          const validProjectIds = new Set(ordered.map((p) => p.id));
+          const currentSelected = get().selectedProjectId;
+          // If the currently selected project no longer exists (deleted
+          // elsewhere), fall back to the aggregate "all" view instead of
+          // continuing to poll a removed repo.
+          const nextSelected =
+            currentSelected && currentSelected !== "all" && !validProjectIds.has(currentSelected)
+              ? "all"
+              : currentSelected;
+          set({
+            projects: ordered,
+            selectedProjectId: nextSelected,
+            recentEvents: get().recentEvents.filter((e) => validProjectIds.has(e?.project_id)),
+          });
+          lastProjectsFetchTime = Date.now();
+        }
+      } catch (e) {
+        console.warn("Failed to fetch projects", e);
+      } finally {
+        fetchProjectsPromise = null;
+      }
+    })();
+    return fetchProjectsPromise;
   },
 
   createProject: async (payload) => {
@@ -819,6 +858,9 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     set({
       projects: nextProjects,
       selectedProjectId: nextSelected,
+      // Drop this project's audit records from the in-memory feed immediately
+      // so a removed repo's events disappear without waiting for a refetch.
+      recentEvents: get().recentEvents.filter((e) => e?.project_id !== cleanId),
     });
     saveProjectOrder(nextProjects.map((p) => p.id));
 
@@ -826,6 +868,9 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       await fetch(`http://127.0.0.1:8000/api/projects/${encodeURIComponent(cleanId)}`, {
         method: "DELETE",
       });
+      // Reconcile the audit feed with the server-truth in case other stale
+      // events for this project were still cached in memory.
+      await get().fetchRecentEvents(undefined, true);
     } catch (e) {
       console.warn("Failed to delete project on server, removed locally", e);
     }
@@ -863,26 +908,44 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     }
   },
 
-  fetchRecentEvents: async (projectId?: string) => {
-    try {
-      const url =
-        projectId && projectId !== "all"
-          ? `http://127.0.0.1:8000/api/projects/${encodeURIComponent(projectId)}/events`
-          : `http://127.0.0.1:8000/api/events/recent`;
-      const res = await fetch(url);
-      if (res.ok) {
-        const data: ScanEventItem[] = await res.json();
-        const readIds = get().readEventIds.length > 0 ? get().readEventIds : getSavedReadEventIds();
-        const unreadCount = data.filter((e) => !readIds.includes(e.id)).length;
-        set({
-          recentEvents: data,
-          readEventIds: readIds,
-          unreadEventsCount: unreadCount,
-        });
-      }
-    } catch (e) {
-      console.warn("Failed to fetch recent events", e);
+  fetchRecentEvents: async (projectId?: string, force: boolean = false) => {
+    const cacheKey = projectId && projectId !== "all" ? projectId : "all";
+    const now = Date.now();
+    const lastTime = lastEventsFetchTimeMap.get(cacheKey) ?? 0;
+    if (!force && (get().recentEvents?.length ?? 0) > 0 && now - lastTime < 4000) {
+      return;
     }
+    const existingPromise = fetchEventsPromiseMap.get(cacheKey);
+    if (existingPromise) {
+      return existingPromise;
+    }
+    const promise = (async () => {
+      try {
+        const url =
+          projectId && projectId !== "all"
+            ? `http://127.0.0.1:8000/api/projects/${encodeURIComponent(projectId)}/events`
+            : `http://127.0.0.1:8000/api/events/recent`;
+        const res = await fetch(url);
+        if (res?.ok) {
+          const data: ScanEventItem[] = await res.json();
+          const safeData = Array.isArray(data) ? data : [];
+          const readIds = (get().readEventIds?.length ?? 0) > 0 ? get().readEventIds : getSavedReadEventIds();
+          const unreadCount = safeData.filter((e) => e?.id && !readIds.includes(e.id)).length;
+          set({
+            recentEvents: safeData,
+            readEventIds: readIds,
+            unreadEventsCount: unreadCount,
+          });
+          lastEventsFetchTimeMap.set(cacheKey, Date.now());
+        }
+      } catch (e) {
+        console.warn("Failed to fetch recent events", e);
+      } finally {
+        fetchEventsPromiseMap.delete(cacheKey);
+      }
+    })();
+    fetchEventsPromiseMap.set(cacheKey, promise);
+    return promise;
   },
 
   addLiveEvent: (event: ScanEventItem) => {
@@ -987,7 +1050,10 @@ export const useFlowStore = create<FlowState>((set, get) => ({
 
   saveCurrentPolicyToProject: async (projectId: string) => {
     try {
-      const targetProjId = projectId === "all" ? "rxjs" : projectId;
+      // Refuse to persist to the aggregate view / a missing project instead of
+      // silently writing to a phantom `rxjs` project.
+      if (!projectId || projectId === "all") return false;
+      const targetProjId = projectId;
       const policyPayload = {
         preset: get().activePresetId,
         updated_at: new Date().toISOString(),

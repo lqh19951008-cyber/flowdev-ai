@@ -222,16 +222,25 @@ export interface CustomGateRule {
 }
 
 export interface AgentSkillItem {
+  id?: string;
   title: string;
   summary: string;
   markdown?: string;
+  skill_markdown?: string;
   category?: string;
+  scope?: "frontend" | "backend" | "security" | "general" | string;
+  file_globs?: string[];
+  check_type?: "ai_guideline" | "static_regex" | string;
+  status?: "active" | "warning" | "deprecated" | string;
 }
 
 export interface SynthesizedRule {
   title: string;
-  category: "stability" | "security" | "performance" | "architecture";
-  severity: "critical" | "warning";
+  category: "stability" | "security" | "performance" | "architecture" | string;
+  scope?: "frontend" | "backend" | "security" | "general" | string;
+  file_globs?: string[];
+  check_type?: "ai_guideline" | "static_regex" | string;
+  severity: "critical" | "warning" | string;
   summary: string;
   bad_snippet: string;
   good_snippet: string;
@@ -242,4 +251,73 @@ export interface SynthesizedRule {
   source_files?: string[];
   common_root_cause?: string;
   skill_markdown_antigravity?: string;
+}
+
+// --- Committer / All-Team Audit Leaderboard Types ---
+// Feeds the "全员提交拦截与审计流水" dashboard panel.
+
+export interface CommitterTopProject {
+  project_id: string;
+  count: number;
+}
+
+export interface CommitterTopFile {
+  file: string;
+  count: number;
+}
+
+export interface CommitterStat {
+  committer: string;
+  total_commits: number;
+  blocked_commits: number;
+  passed_commits: number;
+  pass_rate: number;
+  block_rate: number;
+  first_seen: string | null;
+  last_seen: string | null;
+  last_blocked_at: string | null;
+  risk_score: number;
+  top_projects: CommitterTopProject[];
+  top_files: CommitterTopFile[];
+}
+
+// --- AI Chat Skill Generator (audit -> skill -> push) ---
+
+export interface AuditChatMessage {
+  role: "user" | "assistant" | "system";
+  content: string;
+  at: number;
+}
+
+export interface AuditDispatchApplyResult {
+  project_id: string;
+  ok: boolean;
+  error?: string;
+  pushed?: boolean;
+  skill_id?: string;
+}
+
+export interface AuditDispatchPushState {
+  project_id: string;
+  policy_version: string | null;
+  pending_push_version: string | null;
+  push_enabled: boolean;
+  pending: boolean;
+  last_pushed_at: string | null;
+}
+
+export interface AuditDispatchResponse {
+  success: boolean;
+  rule: SynthesizedRule;
+  applied: number;
+  results: AuditDispatchApplyResult[];
+  push_states: AuditDispatchPushState[];
+  audit_summary: {
+    rule_title: string;
+    category: string;
+    source_events: number;
+    committers_distinct: number;
+    projects_targeted: number;
+    all_pushed: boolean;
+  };
 }

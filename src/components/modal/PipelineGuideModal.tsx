@@ -127,7 +127,7 @@ export function PipelineGuideModal({ isOpen, onClose }: PipelineGuideModalProps)
                   选择目标代码仓库
                 </div>
                 <div className="text-slate-600 dark:text-slate-400 text-[11px] mt-0.5">
-                  在顶部导航栏下拉框选择当前要定制策略的项目（如 <span className="font-mono text-cyan-600 dark:text-cyan-300 font-semibold">{selectedProjectId || "rxjs"}</span>），系统会自动读取并加载该仓库专属的门禁拓扑。
+                  在顶部导航栏下拉框选择当前要定制策略的项目（如 <span className="font-mono text-cyan-600 dark:text-cyan-300 font-semibold">{selectedProjectId && selectedProjectId !== "all" ? selectedProjectId : "未选择"}</span>），系统会自动读取并加载该仓库专属的门禁拓扑。
                 </div>
               </div>
             </div>

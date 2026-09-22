@@ -205,7 +205,7 @@ export function AddProjectModal(props?: AddProjectModalProps) {
   if (!isOpen) return null;
 
   // 安装命令的常量计算（非 hooks，可置于早返回之后）
-  const nodeInstallCmd = `node scripts/install-hook.js`;
+  const nodeInstallCmd = `node scripts/install-to.js "<目标项目路径>"`;
   const platformCommands = {
     powershell: `New-Item -ItemType Directory -Force -Path .git/hooks | Out-Null; Invoke-WebRequest -Uri "${serverUrl}/scripts/flowdev-hook.js" -OutFile ".git/hooks/pre-commit" -UseBasicParsing; node .git/hooks/pre-commit --status`,
     bash: `mkdir -p .git/hooks && curl -fsSL "${serverUrl}/scripts/flowdev-hook.js" -o .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit && node .git/hooks/pre-commit --status`,
@@ -742,7 +742,7 @@ export function AddProjectModal(props?: AddProjectModalProps) {
               {/* Node.js fallback (跨平台通用) */}
               <div className="flex items-center justify-between text-[11px] text-slate-400 pt-2 px-1 border-t border-slate-100 dark:border-slate-800">
                 <span>
-                  备选 (需项目本地有 <code className="font-mono text-slate-600 dark:text-slate-300">scripts/install-hook.js</code>)：
+                  备选 (在 <code className="font-mono text-slate-600 dark:text-slate-300">flowdev-ai</code> 目录下执行，注入到目标仓库)：
                   <code className="font-mono text-slate-600 dark:text-slate-300 ml-1">{nodeInstallCmd}</code>
                 </span>
                 <button

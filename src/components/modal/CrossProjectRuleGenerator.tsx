@@ -644,6 +644,7 @@ export function CrossProjectRuleGenerator({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

@@ -45,6 +45,11 @@ class CliScanResponse(BaseModel):
     committer: Optional[str] = None
     event_id: Optional[str] = None
     file_results: Optional[List[Dict[str, Any]]] = None
+    # Set when the requested project is not (or no longer) registered. The
+    # local hook uses this to self-detach instead of letting the server
+    # resurrect the project with a strict default policy.
+    project_missing: Optional[bool] = False
+    project_deleted: Optional[bool] = False
 
 
 class CliApplySuggestionsRequest(BaseModel):
@@ -254,8 +259,44 @@ class CliScanner:
         branch: str = "main",
         commit_hash: str = "",
     ) -> CliScanResponse:
-        # 0. Load project-specific gate policy from database
+        # 0. Load project-specific gate policy from database.
+        #
+        # A missing policy means the project was never registered or has been
+        # deliberately removed. Do NOT fall through to `ProjectGatePolicy({})`
+        # (which would apply the strictest defaults and keep blocking commits)
+        # and never auto-create the project here. Instead, bypass the gate and
+        # tell the local hook to detach.
         raw_policy = DatabaseService.get_project_policy(project_id)
+        if raw_policy is None:
+            tombstone = DatabaseService.get_project(project_id, include_deleted=True) or {}
+            was_deleted = bool(tombstone.get("deleted_at"))
+            state_label = "已移除" if was_deleted else "未接入"
+            logger.warning(
+                "CLI scan requested for %s project '%s' - bypassing gate "
+                "(project row not resurrected).",
+                "removed" if was_deleted else "unknown",
+                project_id,
+            )
+            return CliScanResponse(
+                passed=True,
+                critical_issues=[],
+                suggestions=[
+                    f"项目 '{project_id}' 已从 FlowDev-AI 平台移除或从未接入。",
+                    "如需继续门禁: 在 Web 控制台重新添加该项目；",
+                    "如需彻底停止本地拦截: 运行 node scripts/uninstall-from.js <仓库路径>，"
+                    "或在仓库执行 git config flowdev.enabled false。",
+                ],
+                summary=(
+                    f"项目 '{project_id}' {state_label}；"
+                    "FlowDev 门禁已自动放行，不阻断本次提交。"
+                ),
+                project_id=project_id,
+                committer=committer,
+                project_missing=True,
+                project_deleted=was_deleted,
+                file_results=[],
+            )
+
         policy = ProjectGatePolicy(raw_policy)
         logger.info(
             f"Enforcing gate policy for project '{project_id}': "

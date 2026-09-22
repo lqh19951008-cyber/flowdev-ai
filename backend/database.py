@@ -120,6 +120,12 @@ def init_db() -> None:
         _safe_add_column("last_applied_at", "last_applied_at TEXT DEFAULT NULL")
         _safe_add_column("last_applied_version", "last_applied_version TEXT DEFAULT '0.0.0'")
         _safe_add_column("last_pushed_changelog", "last_pushed_changelog TEXT DEFAULT NULL")
+        # Soft-delete / tombstone. Kept instead of a hard DELETE so that a
+        # local Git hook that still references a removed project can be told
+        # "this project was deliberately removed" instead of resurrecting it
+        # (which used to happen on every commit with the strictest default
+        # policy and kept blocking commits forever).
+        _safe_add_column("deleted_at", "deleted_at TEXT DEFAULT NULL")
 
         # Scan Events Table
         cursor.execute(
@@ -270,7 +276,6 @@ def init_db() -> None:
 
         conn.commit()
 
-
 # Initialize database schema on module load
 init_db()
 
@@ -280,18 +285,50 @@ class DatabaseService:
     """High-level database access service."""
 
     @classmethod
-    def get_or_create_project(cls, project_id: str, name: Optional[str] = None) -> Dict[str, Any]:
-        """Ensures a project exists in the database, auto-creating if new."""
-        clean_id = project_id.strip() or "default-project"
+    def get_project(cls, project_id: str, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+        """Fetches a single project row. Returns None when absent (or soft-deleted).
+
+        This is the *read* primitive; it never creates anything.
+        """
+        clean_id = (project_id or "").strip()
+        if not clean_id:
+            return None
         with get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM projects WHERE id = ?", (clean_id,))
+            if include_deleted:
+                cursor.execute("SELECT * FROM projects WHERE id = ?", (clean_id,))
+            else:
+                cursor.execute(
+                    "SELECT * FROM projects WHERE id = ? AND deleted_at IS NULL",
+                    (clean_id,),
+                )
             row = cursor.fetchone()
-            if row:
-                return dict(row)
+            return dict(row) if row else None
 
-            now = get_utc_now_iso()
-            display_name = name or clean_id
+    @classmethod
+    def get_or_create_project(
+        cls, project_id: str, name: Optional[str] = None, include_deleted: bool = False
+    ) -> Optional[Dict[str, Any]]:
+        """Ensures a project exists, auto-creating it if it is genuinely new.
+
+        Soft-deleted projects are deliberately NOT resurrected here: they keep
+        their tombstone until an explicit `create_project` call re-adds them.
+        Returns None for a soft-deleted project instead of a fresh strict row.
+        """
+        clean_id = (project_id or "").strip() or "default-project"
+
+        existing = cls.get_project(clean_id, include_deleted=include_deleted)
+        if existing:
+            return existing
+
+        # Row exists but was soft-deleted -> do not silently recreate it.
+        if cls.get_project(clean_id, include_deleted=True):
+            return None
+
+        now = get_utc_now_iso()
+        display_name = name or clean_id
+        with get_connection() as conn:
+            cursor = conn.cursor()
             cursor.execute(
                 """
                 INSERT INTO projects (id, name, description, policy_dag_json, created_at, updated_at)
@@ -300,6 +337,8 @@ class DatabaseService:
                 (clean_id, display_name, f"自动识别的代码仓库: {clean_id}", "{}", now, now),
             )
             conn.commit()
+        return cls.get_project(clean_id)
+
     @classmethod
     def create_project(
         cls,
@@ -319,7 +358,7 @@ class DatabaseService:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM projects WHERE id = ?", (clean_id,))
             row = cursor.fetchone()
-            if row:
+            if row and not row["deleted_at"]:
                 return dict(row)
 
             now = get_utc_now_iso()
@@ -336,6 +375,30 @@ class DatabaseService:
                 initial_policy.update(policy_dag)
                 initial_policy["gate_enabled"] = action != "disabled"
                 initial_policy["failure_action"] = action
+
+            if row:
+                # Re-adding a previously removed project: clear the tombstone
+                # and reset it to the freshly requested policy.
+                cursor.execute(
+                    """
+                    UPDATE projects
+                    SET name = ?, description = ?, policy_dag_json = ?,
+                        deleted_at = NULL, updated_at = ?,
+                        policy_version = '0.0.0', pending_push_version = NULL,
+                        last_applied_version = '0.0.0', last_applied_at = NULL
+                    WHERE id = ?
+                    """,
+                    (display_name, desc, json.dumps(initial_policy, ensure_ascii=False), now, clean_id),
+                )
+                conn.commit()
+                return {
+                    "id": clean_id,
+                    "name": display_name,
+                    "description": desc,
+                    "policy_dag_json": json.dumps(initial_policy, ensure_ascii=False),
+                    "created_at": row["created_at"] or now,
+                    "updated_at": now,
+                }
 
             cursor.execute(
                 """
@@ -356,15 +419,33 @@ class DatabaseService:
 
     @classmethod
     def delete_project(cls, project_id: str) -> bool:
-        """Deletes a project and its associated scan events from the database."""
+        """Removes a project and all of its audit history.
+
+        The project row itself is soft-deleted (tombstoned) so a local repo that
+        still has the FlowDev pre-commit hook installed can detect the removal
+        and self-detach instead of the server resurrecting it. But the project's
+        scan events / audit records are HARD DELETED — deleting a project should
+        not leave orphaned records behind in dashboards or leaderboards.
+
+        Re-adding the same id via `create_project` restores it cleanly.
+        """
         clean_id = project_id.strip()
         if not clean_id:
             return False
 
+        now = get_utc_now_iso()
         with get_connection() as conn:
             cursor = conn.cursor()
+            # Purge all audit records belonging to this project first.
             cursor.execute("DELETE FROM scan_events WHERE project_id = ?", (clean_id,))
-            cursor.execute("DELETE FROM projects WHERE id = ?", (clean_id,))
+            cursor.execute(
+                """
+                UPDATE projects
+                SET deleted_at = ?, pending_push_version = NULL, updated_at = ?
+                WHERE id = ? AND deleted_at IS NULL
+                """,
+                (now, now, clean_id),
+            )
             conn.commit()
             return cursor.rowcount > 0
 
@@ -386,6 +467,7 @@ class DatabaseService:
                     MAX(e.created_at) as last_scan_at
                 FROM projects p
                 LEFT JOIN scan_events e ON p.id = e.project_id
+                WHERE p.deleted_at IS NULL
                 GROUP BY p.id
                 ORDER BY p.updated_at DESC
                 """
@@ -415,9 +497,17 @@ class DatabaseService:
             return results
 
     @classmethod
-    def get_project_policy(cls, project_id: str) -> Dict[str, Any]:
-        """Fetches the parsed policy DAG dictionary for a project."""
-        project = cls.get_or_create_project(project_id)
+    def get_project_policy(cls, project_id: str) -> Optional[Dict[str, Any]]:
+        """Fetches the parsed policy DAG dictionary for a project.
+
+        Returns None when the project does not exist or has been removed.
+        This is a READ path and must never auto-create a project — doing so
+        resurrected deleted projects with an empty policy (which falls back to
+        the strictest defaults) and kept blocking commits indefinitely.
+        """
+        project = cls.get_project(project_id)
+        if not project:
+            return None
         raw_json = project.get("policy_dag_json") or "{}"
         try:
             return json.loads(raw_json)
@@ -452,6 +542,7 @@ class DatabaseService:
                        p.pending_push_version, p.push_enabled,
                        p.last_pushed_at, p.last_applied_at, p.updated_at
                 FROM projects p
+                WHERE p.deleted_at IS NULL
                 ORDER BY p.updated_at DESC
                 """
             )
@@ -564,12 +655,117 @@ class DatabaseService:
                 """
                 UPDATE projects
                 SET policy_dag_json = ?, updated_at = ?
-                WHERE id = ?
+                WHERE id = ? AND deleted_at IS NULL
                 """,
                 (json.dumps(policy_dag, ensure_ascii=False), now, project_id),
             )
             conn.commit()
             return cursor.rowcount > 0
+
+    @classmethod
+    def sanitize_project_policies(cls) -> int:
+        """Heals corrupted or invalid project policies in the database.
+        
+        Actions:
+        1. Fixes mojibake/corrupted characters (e.g. \\ufffd, garbled UTF-8) in custom_rules and agent_skills.
+        2. Drops overly broad / catastrophic regex patterns (such as `\\.\\w+\\.\\w+\\b` or `.*`) that cause false positives.
+        3. Normalizes title, scope, and level for standard rules.
+        4. Deduplicates rules with identical patterns or titles.
+        """
+        cleaned_count = 0
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, policy_dag_json FROM projects")
+            rows = cursor.fetchall()
+
+            for row in rows:
+                pid = row["id"]
+                raw_json = row["policy_dag_json"] or "{}"
+                try:
+                    policy = json.loads(raw_json)
+                except Exception:
+                    continue
+
+                modified = False
+                custom_rules = policy.get("custom_rules") or []
+                agent_skills = policy.get("agent_skills") or []
+                skills = policy.get("skills") or []
+
+                # Clean custom_rules
+                clean_rules = []
+                seen_patterns = set()
+                for r in custom_rules:
+                    if not isinstance(r, dict):
+                        continue
+                    pattern = str(r.get("pattern", "")).strip()
+                    title = str(r.get("title", "")).strip()
+                    msg = str(r.get("message", "")).strip()
+
+                    # Drop catastrophic patterns that match common code constructs
+                    if pattern in (r"\.\w+\.\w+\b", r"\.\w+\.\w+", r".*", r".+", r"\w+"):
+                        modified = True
+                        continue
+
+                    # Heal mojibake
+                    if "\ufffd" in title or "δ" in title or "\ufffd" in msg or "" in title or "" in msg:
+                        if "null" in pattern:
+                            title = "未防御的深层属性访问与空对象引用"
+                            msg = "检测到针对 null/undefined 的直接属性访问，请使用可选链 (?.) 或显式判空防御！"
+                        else:
+                            title = "代码规范与边界防御卡点"
+                            msg = "检测到潜在代码缺陷，请遵循防御性编程规范！"
+                        r["title"] = title
+                        r["message"] = msg
+                        modified = True
+
+                    # Deduplicate by pattern
+                    if pattern in seen_patterns:
+                        modified = True
+                        continue
+                    seen_patterns.add(pattern)
+                    clean_rules.append(r)
+
+                # Clean agent_skills & skills
+                clean_skills = []
+                seen_titles = set()
+                for s in (agent_skills or skills):
+                    if not isinstance(s, dict):
+                        continue
+                    stitle = str(s.get("title", "")).strip()
+                    ssummary = str(s.get("summary", "")).strip()
+
+                    # Drop corrupted Rule 5 or mojibake skills
+                    if "\ufffd" in stitle or "ֵȫ" in stitle or "Կ" in stitle or "" in stitle or "" in ssummary:
+                        if "null" in str(s.get("skill_markdown", "")).lower() or "optional" in str(s.get("skill_markdown", "")).lower():
+                            stitle = "防御性可选链与空指针安全防护规范"
+                            ssummary = "禁止对深层对象或外部输入进行未经校验的解构和直接链式访问，必须使用可选链（?.）与空值合并运算符（??）。"
+                            s["title"] = stitle
+                            s["summary"] = ssummary
+                            s["category"] = "stability"
+                        else:
+                            modified = True
+                            continue
+
+                    if stitle in seen_titles:
+                        modified = True
+                        continue
+                    seen_titles.add(stitle)
+                    clean_skills.append(s)
+
+                if modified or len(clean_rules) != len(custom_rules) or len(clean_skills) != len(agent_skills):
+                    policy["custom_rules"] = clean_rules
+                    policy["agent_skills"] = clean_skills
+                    policy["skills"] = clean_skills
+                    policy["gate_rules"] = clean_rules
+                    now = get_utc_now_iso()
+                    cursor.execute(
+                        "UPDATE projects SET policy_dag_json = ?, updated_at = ? WHERE id = ?",
+                        (json.dumps(policy, ensure_ascii=False), now, pid),
+                    )
+                    cleaned_count += 1
+
+            conn.commit()
+        return cleaned_count
 
     # ---------------- Policy version & push state ----------------
     @classmethod
@@ -579,8 +775,13 @@ class DatabaseService:
         Used by both the Web control panel and the local Git hook to negotiate
         whether a new rule set has been staged server-side and is waiting for
         the developer to confirm application in the next commit.
+
+        Read-only: a missing / removed project yields an empty state with
+        `deleted=True` so the local hook can self-detach instead of the server
+        silently recreating a strict default project.
         """
-        cls.get_or_create_project(project_id)
+        if not cls.get_project(project_id):
+            return cls._empty_push_state(deleted=True)
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -616,7 +817,7 @@ class DatabaseService:
             }
 
     @staticmethod
-    def _empty_push_state() -> Dict[str, Any]:
+    def _empty_push_state(deleted: bool = False) -> Dict[str, Any]:
         return {
             "policy_version": "0.0.0",
             "pending_push_version": None,
@@ -626,6 +827,7 @@ class DatabaseService:
             "last_applied_version": "0.0.0",
             "changelog": [],
             "pending": False,
+            "deleted": deleted,
         }
 
     @classmethod
@@ -639,7 +841,7 @@ class DatabaseService:
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT policy_version FROM projects WHERE id = ?",
+                "SELECT policy_version FROM projects WHERE id = ? AND deleted_at IS NULL",
                 (project_id,),
             )
             row = cursor.fetchone()
@@ -650,7 +852,7 @@ class DatabaseService:
                 """
                 UPDATE projects
                 SET policy_version = ?, updated_at = ?
-                WHERE id = ?
+                WHERE id = ? AND deleted_at IS NULL
                 """,
                 (new_version, now, project_id),
             )
@@ -674,7 +876,7 @@ class DatabaseService:
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT policy_version FROM projects WHERE id = ?",
+                "SELECT policy_version FROM projects WHERE id = ? AND deleted_at IS NULL",
                 (project_id,),
             )
             row = cursor.fetchone()
@@ -687,7 +889,7 @@ class DatabaseService:
                 SET pending_push_version = ?,
                     last_pushed_at = ?,
                     last_pushed_changelog = ?
-                WHERE id = ?
+                WHERE id = ? AND deleted_at IS NULL
                 """,
                 (
                     target_version,
@@ -710,7 +912,7 @@ class DatabaseService:
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT pending_push_version FROM projects WHERE id = ?",
+                "SELECT pending_push_version FROM projects WHERE id = ? AND deleted_at IS NULL",
                 (project_id,),
             )
             row = cursor.fetchone()
@@ -724,7 +926,7 @@ class DatabaseService:
                 SET pending_push_version = NULL,
                     last_applied_at = ?,
                     last_applied_version = ?
-                WHERE id = ?
+                WHERE id = ? AND deleted_at IS NULL
                 """,
                 (now, pending, project_id),
             )
@@ -738,7 +940,7 @@ class DatabaseService:
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "UPDATE projects SET pending_push_version = NULL WHERE id = ?",
+                "UPDATE projects SET pending_push_version = NULL WHERE id = ? AND deleted_at IS NULL",
                 (project_id,),
             )
             conn.commit()
@@ -751,7 +953,7 @@ class DatabaseService:
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "UPDATE projects SET push_enabled = ? WHERE id = ?",
+                "UPDATE projects SET push_enabled = ? WHERE id = ? AND deleted_at IS NULL",
                 (1 if enabled else 0, project_id),
             )
             conn.commit()
@@ -838,6 +1040,7 @@ class DatabaseService:
                     """
                     SELECT * FROM scan_events
                     WHERE project_id = ?
+                      AND project_id NOT IN (SELECT id FROM projects WHERE deleted_at IS NOT NULL)
                     ORDER BY created_at DESC
                     LIMIT ?
                     """,
@@ -847,12 +1050,185 @@ class DatabaseService:
                 cursor.execute(
                     """
                     SELECT * FROM scan_events
+                    WHERE project_id NOT IN (SELECT id FROM projects WHERE deleted_at IS NOT NULL)
                     ORDER BY created_at DESC
                     LIMIT ?
                     """,
                     (limit,),
                 )
 
+            rows = cursor.fetchall()
+            events = []
+            for r in rows:
+                events.append({
+                    "id": r["id"],
+                    "project_id": r["project_id"],
+                    "committer": r["committer"],
+                    "branch": r["branch"],
+                    "commit_hash": r["commit_hash"],
+                    "passed": bool(r["passed"]),
+                    "critical_issues": json.loads(r["critical_issues_json"] or "[]"),
+                    "suggestions": json.loads(r["suggestions_json"] or "[]"),
+                    "summary": r["summary"],
+                    "files_count": r["files_count"],
+                    "files": json.loads(r["files_detail_json"] or "[]"),
+                    "created_at": normalize_iso_timestamp(r["created_at"]),
+                })
+            return events
+
+    # =========================================================================
+    # Committer analytics — feeds the "全员提交拦截与审计流水" leaderboard.
+    # =========================================================================
+
+    @classmethod
+    def list_committers_leaderboard(cls, days: int = 30, limit: int = 50) -> List[Dict[str, Any]]:
+        """Per-committer audit aggregates over the last `days` days.
+
+        Computes per-committer:
+          - total_commits, blocked_commits, passed_commits
+          - pass_rate (%), block_rate (%)
+          - first_seen, last_seen (UTC ISO timestamps)
+          - top_projects (top 3 project ids by scan count)
+          - top_files (top 3 files most frequently involved in blocks)
+          - last_blocked_at (most recent critical event timestamp)
+          - risk_score (0-100; higher = riskier)
+
+        Sorted by risk_score DESC then blocked_commits DESC.
+        """
+        from datetime import datetime, timezone, timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, project_id, committer, passed, critical_issues_json, created_at
+                FROM scan_events
+                WHERE created_at >= ?
+                  AND project_id NOT IN (SELECT id FROM projects WHERE deleted_at IS NOT NULL)
+                ORDER BY created_at DESC
+                """,
+                (cutoff,),
+            )
+            rows = cursor.fetchall()
+
+        committers: Dict[str, Dict[str, Any]] = {}
+        for r in rows:
+            committer = (r["committer"] or "unknown").strip() or "unknown"
+            proj = r["project_id"] or "unknown"
+            entry = committers.setdefault(committer, {
+                "committer": committer,
+                "total_commits": 0,
+                "blocked_commits": 0,
+                "passed_commits": 0,
+                "first_seen": None,
+                "last_seen": None,
+                "last_blocked_at": None,
+                "project_counter": {},
+                "blocked_files": [],
+            })
+            entry["total_commits"] += 1
+            if not r["passed"]:
+                entry["blocked_commits"] += 1
+                ts = normalize_iso_timestamp(r["created_at"])
+                if entry["last_blocked_at"] is None or (ts and ts > entry["last_blocked_at"]):
+                    entry["last_blocked_at"] = ts
+            else:
+                entry["passed_commits"] += 1
+            ts = normalize_iso_timestamp(r["created_at"])
+            if entry["first_seen"] is None or (ts and ts < entry["first_seen"]):
+                entry["first_seen"] = ts
+            if entry["last_seen"] is None or (ts and ts > entry["last_seen"]):
+                entry["last_seen"] = ts
+            entry["project_counter"][proj] = entry["project_counter"].get(proj, 0) + 1
+            if not r["passed"]:
+                try:
+                    issues = json.loads(r["critical_issues_json"] or "[]")
+                except Exception:
+                    issues = []
+                for iss in issues:
+                    iss_str = str(iss)
+                    m = re.match(r"^\s*\[([^\]]+)\]", iss_str)
+                    if m:
+                        entry["blocked_files"].append(m.group(1))
+
+        # Now compute risk scores + flatten top-N lists
+        results: List[Dict[str, Any]] = []
+        now = datetime.now(timezone.utc)
+        for entry in committers.values():
+            total = entry["total_commits"]
+            blocked = entry["blocked_commits"]
+            block_ratio = (blocked / total) if total > 0 else 0.0
+            pass_rate = ((total - blocked) / total * 100) if total > 0 else 100.0
+
+            # Recency score: 20 if blocked in last 24h, decaying to 0 over `days`
+            recency_score = 0.0
+            if entry["last_blocked_at"]:
+                try:
+                    last_dt = datetime.fromisoformat(entry["last_blocked_at"].rstrip("Z"))
+                    hours_ago = (now - last_dt).total_seconds() / 3600.0
+                    if hours_ago < 24:
+                        recency_score = 20.0
+                    elif hours_ago < 24 * days:
+                        recency_score = max(0.0, 20.0 * (1 - (hours_ago - 24) / (24 * days)))
+                except Exception:
+                    pass
+
+            volume_score = min(blocked, 20) / 20.0 * 30.0
+            risk_score = round(block_ratio * 50.0 + volume_score + recency_score, 1)
+
+            top_projects = sorted(
+                [{"project_id": k, "count": v} for k, v in entry["project_counter"].items()],
+                key=lambda x: -x["count"],
+            )[:3]
+            file_counter: Dict[str, int] = {}
+            for f in entry["blocked_files"]:
+                file_counter[f] = file_counter.get(f, 0) + 1
+            top_files = sorted(
+                [{"file": k, "count": v} for k, v in file_counter.items()],
+                key=lambda x: -x["count"],
+            )[:3]
+
+            results.append({
+                "committer": entry["committer"],
+                "total_commits": total,
+                "blocked_commits": blocked,
+                "passed_commits": total - blocked,
+                "pass_rate": round(pass_rate, 1),
+                "block_rate": round(block_ratio * 100, 1),
+                "first_seen": entry["first_seen"],
+                "last_seen": entry["last_seen"],
+                "last_blocked_at": entry["last_blocked_at"],
+                "risk_score": risk_score,
+                "top_projects": top_projects,
+                "top_files": top_files,
+            })
+
+        results.sort(key=lambda x: (-x["risk_score"], -x["blocked_commits"]))
+        return results[:limit]
+
+    @classmethod
+    def list_committer_events(cls, committer: str, days: int = 30, limit: int = 50) -> List[Dict[str, Any]]:
+        """Returns scan events attributed to a specific committer.
+
+        Committer matching is exact (case-sensitive) since git config user.name
+        is consistent across commits from the same author. Useful for drilling
+        into a single developer's audit history from the leaderboard.
+        """
+        from datetime import datetime, timezone, timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM scan_events
+                WHERE committer = ? AND created_at >= ?
+                  AND project_id NOT IN (SELECT id FROM projects WHERE deleted_at IS NOT NULL)
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (committer, cutoff, limit),
+            )
             rows = cursor.fetchall()
             events = []
             for r in rows:
@@ -1052,4 +1428,12 @@ class DatabaseService:
                 )
             conn.commit()
             return True
+
+
+# Automatically sanitize and heal any corrupted policies on startup
+try:
+    DatabaseService.sanitize_project_policies()
+except Exception:
+    pass
+
 

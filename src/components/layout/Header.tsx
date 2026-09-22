@@ -20,6 +20,7 @@ import {
   Settings as SettingsIcon,
   Sparkles,
   Plus,
+  ShieldCheck,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -32,26 +33,26 @@ import { cn } from "@/lib/utils";
 export function Header() {
   const pathname = usePathname();
   const router = useRouter();
-  const {
-    isDrawerOpen,
-    toggleDrawer,
-    loadPreset,
-    activePresetId,
-    // Multi-tenant & Live Guard
-    projects,
-    selectedProjectId,
-    setSelectedProjectId,
-    unreadEventsCount,
-    isLiveFeedOpen,
-    setLiveFeedOpen,
-    saveCurrentPolicyToProject,
-    fetchProjects,
-    fetchRecentEvents,
-    activeViewMode,
-    setActiveViewMode,
-    setSettingsModalOpen,
-    setAddProjectModalOpen,
-  } = useFlowStore() ?? {};
+  
+  // Fine-grained selectors to avoid full Header re-renders on canvas dragging or log updates
+  const isDrawerOpen = useFlowStore((s) => s?.isDrawerOpen ?? false);
+  const toggleDrawer = useFlowStore((s) => s?.toggleDrawer);
+  const loadPreset = useFlowStore((s) => s?.loadPreset);
+  const activePresetId = useFlowStore((s) => s?.activePresetId ?? "full_review_heal");
+  const projects = useFlowStore((s) => s?.projects ?? []);
+  const selectedProjectId = useFlowStore((s) => s?.selectedProjectId ?? "all");
+  const setSelectedProjectId = useFlowStore((s) => s?.setSelectedProjectId);
+  const unreadEventsCount = useFlowStore((s) => s?.unreadEventsCount ?? 0);
+  const isLiveFeedOpen = useFlowStore((s) => s?.isLiveFeedOpen ?? false);
+  const setLiveFeedOpen = useFlowStore((s) => s?.setLiveFeedOpen);
+  const saveCurrentPolicyToProject = useFlowStore((s) => s?.saveCurrentPolicyToProject);
+  const fetchProjects = useFlowStore((s) => s?.fetchProjects);
+  const fetchRecentEvents = useFlowStore((s) => s?.fetchRecentEvents);
+  const activeViewMode = useFlowStore((s) => s?.activeViewMode ?? "dashboard");
+  const setActiveViewMode = useFlowStore((s) => s?.setActiveViewMode);
+  const setSettingsModalOpen = useFlowStore((s) => s?.setSettingsModalOpen);
+  const setAddProjectModalOpen = useFlowStore((s) => s?.setAddProjectModalOpen);
+
   const { theme, toggleTheme } = useTheme() ?? {};
 
   const [isPresetMenuOpen, setIsPresetMenuOpen] = useState(false);
@@ -63,6 +64,12 @@ export function Header() {
   const presetMenuRef = useRef<HTMLDivElement>(null);
   const projectMenuRef = useRef<HTMLDivElement>(null);
 
+  // Active state strictly driven by store activeViewMode for instant 0ms response
+  const isDashboardActive = activeViewMode === "dashboard";
+  const isPipelineActive = activeViewMode === "pipeline";
+  const isSkillsActive = activeViewMode === "skills";
+
+  // Initial projects fetch (deduplicated in store)
   useEffect(() => {
     fetchProjects?.();
   }, [fetchProjects]);
@@ -95,9 +102,10 @@ export function Header() {
 
   const handleSavePolicyToProject = async () => {
     const targetProject =
-      selectedProjectId === "all"
-        ? (projects?.[0]?.id ?? "rxjs")
-        : (selectedProjectId ?? "rxjs");
+      selectedProjectId && selectedProjectId !== "all"
+        ? selectedProjectId
+        : (projects?.[0]?.id ?? "");
+    if (!targetProject) return;
     setIsSavingPolicy(true);
     const ok = await saveCurrentPolicyToProject?.(targetProject);
     setIsSavingPolicy(false);
@@ -119,24 +127,35 @@ export function Header() {
     }
   };
 
+  const handleTabClick = (mode: "dashboard" | "pipeline" | "skills", targetUrl: string) => (e: React.MouseEvent) => {
+    if (e?.metaKey || e?.ctrlKey || e?.shiftKey || e?.button !== 0) return;
+    e.preventDefault();
+    if (activeViewMode !== mode) {
+      setActiveViewMode?.(mode);
+    }
+    if (typeof window !== "undefined") {
+      window.history.pushState(null, "", targetUrl);
+    }
+  };
+
+  // Never fabricate a project id. Only append ?project= when a real project is
+  // selected (or at least one exists) — this avoids phantom `?project=rxjs`.
+  const targetProj = selectedProjectId && selectedProjectId !== "all"
+    ? selectedProjectId
+    : (projects?.[0]?.id ?? "");
+  const projectQuery = targetProj ? `?project=${encodeURIComponent(targetProj)}` : "";
+  const dashboardUrl = selectedProjectId && selectedProjectId !== "all" 
+    ? `/dashboard?project=${encodeURIComponent(selectedProjectId)}` 
+    : "/dashboard";
+  const pipelineUrl = `/pipeline${projectQuery}`;
+  const skillsUrl = selectedProjectId && selectedProjectId !== "all" 
+    ? `/skills?project=${encodeURIComponent(selectedProjectId)}` 
+    : "/skills";
+
   return (
     <header className="h-12 w-full border-b border-slate-200/80 dark:border-slate-800/90 bg-white/90 dark:bg-slate-950/95 px-3 flex items-center justify-between z-40 relative select-none shrink-0 backdrop-blur transition-colors duration-200">
       {/* Left: Brand, Mode Switcher & Project Switcher */}
       <div className="flex items-center gap-2 shrink-0">
-        {/* Sidebar Toggle (Only relevant in pipeline mode) */}
-        {/* {activeViewMode === "pipeline" && (
-          <button
-            onClick={() => toggleSidebar()}
-            className={cn(
-              "p-1.5 rounded-lg border border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors shrink-0",
-              isSidebarOpen && "bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-slate-100 border-slate-300 dark:border-slate-700"
-            )}
-            title={isSidebarOpen ? "折叠算子库" : "展开算子库"}
-          >
-            <PanelLeft className="h-4 w-4" />
-          </button>
-        )} */}
-
         {/* Brand Logo & Name */}
         <div className="flex items-center gap-2 shrink-0">
           <div className="h-7 w-7 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center shadow-md shadow-blue-500/20 shrink-0">
@@ -157,45 +176,45 @@ export function Header() {
         {/* Navigation Tabs (Next.js Link Routes) - 3-Pillar Core */}
         <nav className="flex items-center bg-slate-100 dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-800 rounded-lg p-0.5 shrink-0">
           <Link
-            href={selectedProjectId && selectedProjectId !== "all" ? `/dashboard?project=${encodeURIComponent(selectedProjectId)}` : "/dashboard"}
-            onClick={() => setActiveViewMode?.("dashboard")}
+            href={dashboardUrl}
+            onClick={handleTabClick("dashboard", dashboardUrl)}
             className={cn(
-              "flex items-center gap-1.5 px-3 py-1 rounded-md text-xs transition-all whitespace-nowrap font-medium",
-              (pathname === "/dashboard" || pathname === "/") && activeViewMode !== "skills"
+              "flex items-center gap-1.5 px-3 py-1 rounded-md text-xs transition-all whitespace-nowrap font-medium cursor-pointer",
+              isDashboardActive
                 ? "bg-blue-600 text-white font-semibold shadow-sm shadow-blue-500/30"
                 : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
             )}
-            title="研发质量大盘与全员审计流水"
+            title="质量大门 · 研发质量大盘与全员审计流水"
           >
-            <BarChart3 className="h-3.5 w-3.5 shrink-0" />
-            <span>质量大盘</span>
+            <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
+            <span>质量大门</span>
           </Link>
 
           <Link
-            href={selectedProjectId && selectedProjectId !== "all" ? `/pipeline?project=${encodeURIComponent(selectedProjectId)}` : `/pipeline?project=${encodeURIComponent(projects?.[0]?.id ?? "rxjs")}`}
-            onClick={() => setActiveViewMode?.("pipeline")}
+            href={pipelineUrl}
+            onClick={handleTabClick("pipeline", pipelineUrl)}
             className={cn(
-              "flex items-center gap-1.5 px-3 py-1 rounded-md text-xs transition-all whitespace-nowrap font-medium",
-              pathname === "/pipeline" || activeViewMode === "pipeline"
+              "flex items-center gap-1.5 px-3 py-1 rounded-md text-xs transition-all whitespace-nowrap font-medium cursor-pointer",
+              isPipelineActive
                 ? "bg-blue-600 text-white font-semibold shadow-sm shadow-blue-500/30"
                 : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
             )}
-            title="门禁策略编排与规则流水线"
+            title="门禁编排 · 策略编排与规则流水线"
           >
             <Sliders className="h-3.5 w-3.5 shrink-0" />
             <span>门禁编排</span>
           </Link>
 
           <Link
-            href={selectedProjectId && selectedProjectId !== "all" ? `/skills?project=${encodeURIComponent(selectedProjectId)}` : "/skills"}
-            onClick={() => setActiveViewMode?.("skills")}
+            href={skillsUrl}
+            onClick={handleTabClick("skills", skillsUrl)}
             className={cn(
-              "flex items-center gap-1.5 px-3 py-1 rounded-md text-xs transition-all whitespace-nowrap font-medium",
-              pathname === "/skills" || activeViewMode === "skills"
+              "flex items-center gap-1.5 px-3 py-1 rounded-md text-xs transition-all whitespace-nowrap font-medium cursor-pointer",
+              isSkillsActive
                 ? "bg-gradient-to-r from-amber-500 via-indigo-600 to-cyan-600 text-white font-semibold shadow-sm shadow-amber-500/25"
                 : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
             )}
-            title="AI 智能体研发规范与 Skill 资产治理中心"
+            title="Skill 资产库 · AI 智能体研发规范与治理中心"
           >
             <Sparkles className="h-3.5 w-3.5 shrink-0 text-amber-300" />
             <span>Skill 资产库</span>
@@ -214,8 +233,8 @@ export function Header() {
             <FolderGit2 className="h-3.5 w-3.5 text-blue-600 dark:text-cyan-400 shrink-0" />
             <span className="text-slate-500 dark:text-slate-400 font-normal">项目:</span>
             <span className="font-mono max-w-[140px] truncate text-blue-700 dark:text-cyan-300">
-              {pathname === "/pipeline"
-                ? (selectedProjectId === "all" ? (projects?.[0]?.id ?? "rxjs") : selectedProjectId)
+              {activeViewMode === "pipeline"
+                ? (selectedProjectId === "all" ? (projects?.[0]?.id ?? "未选择") : selectedProjectId)
                 : (selectedProjectId === "all" ? "全部项目" : selectedProjectId)}
             </span>
             <ChevronDown className="h-3 w-3 text-slate-400 shrink-0 ml-0.5" />
@@ -224,17 +243,19 @@ export function Header() {
           {isProjectMenuOpen && (
             <div className="absolute left-0 mt-1.5 w-72 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 shadow-2xl p-2 z-50 backdrop-blur animate-in fade-in zoom-in-95 duration-100">
               <div className="flex items-center justify-between px-1.5 pb-1.5 mb-1.5 border-b border-slate-100 dark:border-slate-800 text-[11px] font-semibold text-slate-500">
-                <span>{pathname === "/pipeline" ? "🎯 切换编排目标仓库" : pathname === "/skills" ? "✨ 切换 Skill 治理目标仓库" : "📦 选择监控代码仓库"}</span>
+                <span>{activeViewMode === "pipeline" ? "🎯 切换编排目标仓库" : activeViewMode === "skills" ? "✨ 切换 Skill 治理目标仓库" : "📦 选择监控代码仓库"}</span>
                 <span className="font-mono text-[10px] text-slate-400">{projects?.length ?? 0} 个仓库</span>
               </div>
               <div className="space-y-1 max-h-64 overflow-y-auto pr-0.5">
-                {pathname !== "/pipeline" && (
+                {activeViewMode !== "pipeline" && (
                   <button
                     onClick={() => {
                       setSelectedProjectId?.("all");
                       setIsProjectMenuOpen(false);
-                      const targetPath = pathname === "/skills" ? "/skills" : "/dashboard";
-                      router?.push?.(targetPath);
+                      const targetPath = activeViewMode === "skills" ? "/skills" : "/dashboard";
+                      if (typeof window !== "undefined") {
+                        window.history.pushState(null, "", targetPath);
+                      }
                     }}
                     className={cn(
                       "w-full text-left px-2.5 py-1.5 rounded-lg flex items-center justify-between text-xs transition-colors cursor-pointer",
@@ -252,7 +273,7 @@ export function Header() {
                 {(projects ?? []).map((proj) => {
                   if (!proj?.id) return null;
                   const isCur =
-                    pathname === "/pipeline"
+                    activeViewMode === "pipeline"
                       ? (selectedProjectId === "all" ? (projects?.[0]?.id === proj.id) : selectedProjectId === proj.id)
                       : selectedProjectId === proj.id;
 
@@ -269,8 +290,11 @@ export function Header() {
                       onClick={() => {
                         setSelectedProjectId?.(proj.id);
                         setIsProjectMenuOpen(false);
-                        const targetPath = pathname === "/pipeline" ? "/pipeline" : pathname === "/skills" ? "/skills" : "/dashboard";
-                        router?.push?.(`${targetPath}?project=${encodeURIComponent(proj.id)}`);
+                        const targetPath = activeViewMode === "pipeline" ? "/pipeline" : activeViewMode === "skills" ? "/skills" : "/dashboard";
+                        const nextUrl = `${targetPath}?project=${encodeURIComponent(proj.id)}`;
+                        if (typeof window !== "undefined") {
+                          window.history.pushState(null, "", nextUrl);
+                        }
                       }}
                       className={cn(
                         "w-full text-left px-2.5 py-2 rounded-lg flex items-start justify-between text-xs transition-colors cursor-pointer",
@@ -326,7 +350,7 @@ export function Header() {
 
 
       {/* Right: Actions & Controls */}
-      {pathname !== "/pipeline" ? (
+      {activeViewMode !== "pipeline" ? (
         <div className="flex items-center gap-2 shrink-0">
           {/* Refresh Data */}
           <button
@@ -463,7 +487,9 @@ export function Header() {
                 : "bg-blue-600 hover:bg-blue-500 text-white shadow-blue-500/20"
             )}
             title={`将当前画布 DAG 策略保存下发至 ${
-              selectedProjectId === "all" ? "rxjs" : selectedProjectId
+              selectedProjectId && selectedProjectId !== "all"
+                ? selectedProjectId
+                : (projects?.[0]?.id ?? "全部项目")
             }`}
           >
             {isPolicySaved ? (
